@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "Opti-Power",
+    "slug": "opti-power-mobile",
+    "scheme": "optipower",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Opti Power utilise la caméra pour scanner le QR d’appairage avec le bureau.",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0B1220"
+      },
+      "usesCleartextTraffic": true
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-sqlite",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Autoriser Opti Power à utiliser la caméra pour le scan QR d’appairage."
+        }
+      ]
+    ]
+  }
+}
