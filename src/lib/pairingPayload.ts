@@ -3,6 +3,42 @@
  * (session desktop, identité, endpoint mailbox / cloud).
  */
 
+function stripBom(s: string): string {
+  if (s.length > 0 && s.charCodeAt(0) === 0xfeff) return s.slice(1);
+  return s;
+}
+
+/**
+ * Récupère la chaîne utile depuis le callback expo-camera (formats d'événement variables selon plateforme / version).
+ */
+export function barcodeScanResultToString(result: unknown): string {
+  if (result == null) return '';
+  if (typeof result === 'string') return result.trim();
+  if (typeof result !== 'object') return '';
+  const o = result as Record<string, unknown>;
+  if (o.nativeEvent && typeof o.nativeEvent === 'object') {
+    const ne = o.nativeEvent as Record<string, unknown>;
+    const d = ne.data;
+    const r = ne.raw;
+    if (typeof d === 'string' && d.length > 0) return d;
+    if (typeof r === 'string' && r.length > 0) return r;
+  }
+  const d = o.data;
+  const r = o.raw;
+  if (typeof d === 'string' && d.length > 0) return d;
+  if (typeof r === 'string' && r.length > 0) return r;
+  return '';
+}
+
+/** Extrait un objet JSON même si le scan a ajouté des caractères avant/après. */
+export function extractPairingJsonString(raw: string): string {
+  const s = stripBom(raw.trim());
+  const start = s.indexOf('{');
+  const end = s.lastIndexOf('}');
+  if (start >= 0 && end > start) return s.slice(start, end + 1);
+  return s;
+}
+
 export interface PairingQrPayload {
   pairingSessionId: string;
   desktopDeviceId: string;
@@ -18,10 +54,10 @@ export interface PairingQrPayload {
 }
 
 export function parsePairingPayload(raw: string): PairingQrPayload {
-  const trimmed = raw.trim();
+  const jsonSlice = extractPairingJsonString(raw);
   let obj: unknown;
   try {
-    obj = JSON.parse(trimmed);
+    obj = JSON.parse(jsonSlice);
   } catch {
     throw new Error('Le contenu doit être un JSON valide (QR ou texte collé).');
   }

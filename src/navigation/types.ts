@@ -10,14 +10,13 @@ export type EquipmentsStackParamList = {
 };
 
 export type DrawerParamList = {
-  Dashboard: undefined;
+  Dashboard:  undefined;
   Equipments: undefined;
-  Import: undefined;
-  Analytics: undefined;
-  Alerts: undefined;
-  AIInsights: undefined;
-  Reports: undefined;
-  Settings: undefined;
-  Admin: undefined;
-  Pairing: undefined;
+  Analytics:  undefined;
+  Alerts:     undefined;
+  Reports:    undefined;
+  Profile:    undefined;
+  Settings:   undefined;
+  Admin:      undefined;
+  Pairing:    undefined;
 };

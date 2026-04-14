@@ -1,17 +1,20 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import {
   ActivityIndicator,
+  Alert,
   Image,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 
+import { MaintenanceReportCharts } from '@/components/MaintenanceReportCharts';
 import { VoiceNoteBar } from '@/components/VoiceNoteBar';
 import { useDesktopKpiBundle } from '@/hooks/useDesktopKpiBundle';
 import { useLocalEquipments } from '@/hooks/useLocalEquipments';
@@ -25,10 +28,12 @@ import {
   kpiEmptyReason,
   kpiRecordHasDisplayableData,
 } from '@/lib/desktopKpiDisplay';
+import { submitReportToSupervisor, fetchMyReportStatuses } from '@/lib/reportSubmitApi';
 import { fmtDuration } from '@/lib/reportStructurer';
 import { getKpiRecordFromBundle, getStatsRawFromBundle } from '@/lib/syncBundleLookup';
+import { useAuthStore } from '@/store/authStore';
 import { usePairingStore } from '@/store/pairingStore';
-import { listVoiceReports, deleteVoiceReport } from '@/storage/voiceReportsRepo';
+import { listVoiceReports, deleteVoiceReport, updateVoiceReportSubmission } from '@/storage/voiceReportsRepo';
 import type { VoiceReport } from '@/storage/voiceReportsRepo';
 import { C, statusColor } from '@/theme/colors';
 
@@ -69,23 +74,86 @@ type EquipReport = {
 };
 
 export function ReportsScreen() {
-  const linked = usePairingStore((s) => s.paired?.status === 'linked');
-  const deviceToken = usePairingStore((s) => s.paired?.deviceToken);
-  const cloudLinked = Boolean(linked && deviceToken);
+  const { width: winW } = useWindowDimensions();
+  const linked       = usePairingStore((s) => s.paired?.status === 'linked');
+  const deviceToken  = usePairingStore((s) => s.paired?.deviceToken);
+  const syncEndpoint = usePairingStore((s) => s.paired?.cloudApiBase);
+  const cloudLinked  = Boolean(linked && deviceToken && syncEndpoint);
+
+  // Infos technicien connecté (pour l'en-tête du rapport soumis)
+  const session       = useAuthStore((s) => s.session);
+  const technicianInfo = {
+    name:   session?.user.fullName ?? 'Technicien',
+    email:  session?.user.email   ?? '',
+    userId: session?.user.id      ?? '',
+  };
 
   const { data: equipments = [], isLoading: loadEq } = useLocalEquipments();
   const { data: desktopBundle, isFetching: fetchKpi, refetch } = useDesktopKpiBundle();
 
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const [expanded, setExpanded]         = useState<string | null>(null);
   const [voiceExpanded, setVoiceExpanded] = useState<string | null>(null);
+  const [submittingId, setSubmittingId]   = useState<string | null>(null);
 
   const {
     data: voiceReports = [],
     refetch: refetchVoice,
   } = useQuery({
     queryKey: ['voice-reports'],
-    queryFn: () => listVoiceReports(),
+    queryFn:  () => listVoiceReports(),
   });
+
+  // Vérifier les statuts de revue au chargement (si appairé)
+  const hasFetchedStatuses = useRef(false);
+  useEffect(() => {
+    if (!cloudLinked || !deviceToken || !syncEndpoint || hasFetchedStatuses.current) return;
+    hasFetchedStatuses.current = true;
+    (async () => {
+      try {
+        const statuses = await fetchMyReportStatuses(syncEndpoint, deviceToken);
+        for (const s of statuses) {
+          if (s.localReportId && (s.status === 'accepted' || s.status === 'rejected')) {
+            await updateVoiceReportSubmission(s.localReportId, {
+              reviewStatus: s.status,
+              reviewNote:   s.reviewNote,
+            });
+          }
+        }
+        // Rafraîchir si des statuts ont changé
+        if (statuses.some((s) => s.status !== 'pending')) {
+          void refetchVoice();
+        }
+      } catch { /* non bloquant */ }
+    })();
+  }, [cloudLinked, deviceToken, syncEndpoint, refetchVoice]);
+
+  const handleSubmitReport = useCallback(async (vr: VoiceReport) => {
+    if (!cloudLinked || !deviceToken || !syncEndpoint) {
+      Alert.alert('Non appairé', 'Appairez l\'application avec le bureau avant d\'envoyer un rapport.');
+      return;
+    }
+    if (submittingId) return;
+
+    setSubmittingId(vr.id);
+    try {
+      const result = await submitReportToSupervisor(syncEndpoint, deviceToken, vr, technicianInfo);
+      if (result.success && result.cloudReportId) {
+        await updateVoiceReportSubmission(vr.id, {
+          cloudReportId: result.cloudReportId,
+          submittedAt:   new Date().toISOString(),
+          reviewStatus:  'pending',
+        });
+        await refetchVoice();
+        Alert.alert('Rapport envoyé ✓', 'Le superviseur a été notifié. Vous serez informé de sa décision ici.');
+      } else if (result.duplicate) {
+        Alert.alert('Déjà soumis', 'Ce rapport a déjà été envoyé au superviseur.');
+      } else {
+        Alert.alert('Erreur', result.error ?? 'Impossible d\'envoyer le rapport.');
+      }
+    } finally {
+      setSubmittingId(null);
+    }
+  }, [cloudLinked, deviceToken, syncEndpoint, submittingId, technicianInfo, refetchVoice]);
 
   const reports: EquipReport[] = equipments
     .filter((e) => e.syncedFromDesktop)
@@ -146,6 +214,9 @@ export function ReportsScreen() {
             ? `Fiches KPI par équipement · ${reports.filter((r) => r.hasData).length} / ${reports.length} avec données.`
             : 'Appairez le mobile au bureau pour consulter les rapports.'}
         </Text>
+        <Text style={styles.fabScreenHint}>
+          Note vocale terrain : microphone flottant en bas à droite — touchez pour enregistrer, puis l’icône document pour structurer et sauvegarder.
+        </Text>
 
         {/* ── Notes vocales terrain ───────────────────────────────── */}
         {voiceReports.length > 0 && (
@@ -157,7 +228,23 @@ export function ReportsScreen() {
             {voiceReports.map((vr: VoiceReport) => {
               const isVExp = voiceExpanded === vr.id;
               const s = vr.structuredJson;
-              const hasStructured = s.observations.length > 0 || s.anomalies.length > 0 || s.consumption.length > 0 || s.actions.length > 0;
+              const sec = s._sections;
+              const hasSections = Boolean(
+                sec &&
+                  (sec.objet.length > 0 ||
+                    sec.constats.length > 0 ||
+                    sec.mesures.length > 0 ||
+                    sec.travaux.length > 0 ||
+                    sec.recommandations.length > 0)
+              );
+              const hasStructured =
+                Boolean(s.charts?.length) ||
+                hasSections ||
+                s.observations.length > 0 ||
+                s.anomalies.length > 0 ||
+                s.consumption.length > 0 ||
+                s.actions.length > 0;
+              const extraN = vr.extraAudioUris?.length ?? 0;
               return (
                 <View key={vr.id} style={styles.voiceCard}>
                   <TouchableOpacity
@@ -166,7 +253,7 @@ export function ReportsScreen() {
                     style={styles.cardHeader}
                   >
                     <View style={[styles.voiceIcon, { backgroundColor: C.cyanSoft }]}>
-                      <Ionicons name="mic" size={16} color={C.cyan} />
+                      <Ionicons name="mic" size={20} color={C.cyan} />
                     </View>
                     <View style={styles.cardTitleRow}>
                       <Text style={styles.cardName} numberOfLines={1}>
@@ -180,7 +267,23 @@ export function ReportsScreen() {
                       <View style={styles.durPill}>
                         <Text style={styles.durTxt}>{fmtDuration(vr.durationMs)}</Text>
                       </View>
-                      <Ionicons name={isVExp ? 'chevron-up' : 'chevron-down'} size={14} color={C.textMuted} />
+                      {vr.reviewStatus === 'accepted' ? (
+                        <View style={[styles.reviewBadge, { backgroundColor: '#d1fae5' }]}>
+                          <Ionicons name="checkmark-circle" size={13} color={C.green} />
+                          <Text style={[styles.reviewBadgeTxt, { color: C.green }]}>Approuvé</Text>
+                        </View>
+                      ) : vr.reviewStatus === 'rejected' ? (
+                        <View style={[styles.reviewBadge, { backgroundColor: '#fee2e2' }]}>
+                          <Ionicons name="close-circle" size={13} color={C.red} />
+                          <Text style={[styles.reviewBadgeTxt, { color: C.red }]}>Rejeté</Text>
+                        </View>
+                      ) : vr.reviewStatus === 'pending' ? (
+                        <View style={[styles.reviewBadge, { backgroundColor: '#fef3c7' }]}>
+                          <Ionicons name="time-outline" size={13} color="#d97706" />
+                          <Text style={[styles.reviewBadgeTxt, { color: '#d97706' }]}>En attente</Text>
+                        </View>
+                      ) : null}
+                      <Ionicons name={isVExp ? 'chevron-up' : 'chevron-down'} size={20} color={C.textSub} />
                     </View>
                   </TouchableOpacity>
 
@@ -199,45 +302,143 @@ export function ReportsScreen() {
                         <Text style={styles.voiceTranscription}>{vr.transcription}</Text>
                       ) : null}
 
+                      {extraN > 0 ? (
+                        <Text style={styles.extraAudioNote}>
+                          {extraN} piste{extraN > 1 ? 's' : ''} audio complémentaire{extraN > 1 ? 's' : ''} (fichiers locaux).
+                        </Text>
+                      ) : null}
+
                       {hasStructured && (
                         <View style={styles.structuredBlock}>
-                          {s.observations.length > 0 && (
+                          {sec && sec.objet.length > 0 ? (
+                            <View style={styles.structSect}>
+                              <Text style={[styles.structLabel, { color: C.blue }]}>I. Objet</Text>
+                              {sec.objet.map((o, i) => (
+                                <Text key={`o-${i}`} style={styles.structItem}>• {o}</Text>
+                              ))}
+                            </View>
+                          ) : null}
+                          {sec && sec.constats.length > 0 ? (
+                            <View style={styles.structSect}>
+                              <Text style={[styles.structLabel, { color: C.cyan }]}>II. Constatations</Text>
+                              {sec.constats.map((o, i) => (
+                                <Text key={`c-${i}`} style={styles.structItem}>• {o}</Text>
+                              ))}
+                            </View>
+                          ) : null}
+                          {s.anomalies.length > 0 ? (
+                            <View style={styles.structSect}>
+                              <Text style={[styles.structLabel, { color: C.red }]}>III. Anomalies</Text>
+                              {s.anomalies.map((o, i) => (
+                                <Text key={`a-${i}`} style={styles.structItem}>• {o}</Text>
+                              ))}
+                            </View>
+                          ) : null}
+                          {sec && sec.mesures.length > 0 ? (
+                            <View style={styles.structSect}>
+                              <Text style={[styles.structLabel, { color: C.green }]}>IV. Mesures</Text>
+                              {sec.mesures.map((o, i) => (
+                                <Text key={`m-${i}`} style={styles.structItem}>• {o}</Text>
+                              ))}
+                            </View>
+                          ) : null}
+                          {sec && sec.travaux.length > 0 ? (
+                            <View style={styles.structSect}>
+                              <Text style={[styles.structLabel, { color: C.purple }]}>V. Travaux</Text>
+                              {sec.travaux.map((o, i) => (
+                                <Text key={`t-${i}`} style={styles.structItem}>• {o}</Text>
+                              ))}
+                            </View>
+                          ) : null}
+                          {sec && sec.recommandations.length > 0 ? (
+                            <View style={styles.structSect}>
+                              <Text style={[styles.structLabel, { color: C.amber }]}>VI. Recommandations</Text>
+                              {sec.recommandations.map((o, i) => (
+                                <Text key={`r-${i}`} style={styles.structItem}>• {o}</Text>
+                              ))}
+                            </View>
+                          ) : null}
+                          {!sec && s.observations.length > 0 ? (
                             <View style={styles.structSect}>
                               <Text style={[styles.structLabel, { color: C.cyan }]}>Observations</Text>
                               {s.observations.map((o, i) => <Text key={i} style={styles.structItem}>• {o}</Text>)}
                             </View>
-                          )}
-                          {s.anomalies.length > 0 && (
+                          ) : null}
+                          {!sec && s.consumption.length > 0 ? (
                             <View style={styles.structSect}>
-                              <Text style={[styles.structLabel, { color: C.red }]}>Anomalies</Text>
-                              {s.anomalies.map((o, i) => <Text key={i} style={styles.structItem}>• {o}</Text>)}
-                            </View>
-                          )}
-                          {s.consumption.length > 0 && (
-                            <View style={styles.structSect}>
-                              <Text style={[styles.structLabel, { color: C.green }]}>Énergie</Text>
+                              <Text style={[styles.structLabel, { color: C.green }]}>Énergie / mesures</Text>
                               {s.consumption.map((o, i) => <Text key={i} style={styles.structItem}>• {o}</Text>)}
                             </View>
-                          )}
-                          {s.actions.length > 0 && (
+                          ) : null}
+                          {!sec && s.actions.length > 0 ? (
                             <View style={styles.structSect}>
                               <Text style={[styles.structLabel, { color: C.amber }]}>Actions</Text>
                               {s.actions.map((o, i) => <Text key={i} style={styles.structItem}>• {o}</Text>)}
                             </View>
-                          )}
+                          ) : null}
+                          {s.charts && s.charts.length > 0 ? (
+                            <MaintenanceReportCharts charts={s.charts} width={Math.min(winW - 56, 520)} />
+                          ) : null}
                         </View>
                       )}
 
-                      <TouchableOpacity
-                        onPress={async () => {
-                          await deleteVoiceReport(vr.id);
-                          void refetchVoice();
-                        }}
-                        style={styles.deleteBtn}
-                      >
-                        <Ionicons name="trash-outline" size={13} color={C.red} />
-                        <Text style={styles.deleteBtnText}>Supprimer</Text>
-                      </TouchableOpacity>
+                      {/* ── Revue superviseur ── */}
+                      {vr.reviewStatus === 'rejected' && vr.reviewNote ? (
+                        <View style={styles.reviewNoteBox}>
+                          <Ionicons name="alert-circle-outline" size={14} color={C.red} />
+                          <Text style={styles.reviewNoteText}>
+                            <Text style={{ fontWeight: '700' }}>Motif de refus : </Text>
+                            {vr.reviewNote}
+                          </Text>
+                        </View>
+                      ) : vr.reviewStatus === 'accepted' ? (
+                        <View style={[styles.reviewNoteBox, { backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }]}>
+                          <Ionicons name="checkmark-circle-outline" size={14} color={C.green} />
+                          <Text style={[styles.reviewNoteText, { color: C.green }]}>Rapport approuvé par le superviseur.</Text>
+                        </View>
+                      ) : null}
+
+                      {/* ── Bouton d'envoi au superviseur ── */}
+                      <View style={styles.actionRow}>
+                        {!vr.submittedAt ? (
+                          <TouchableOpacity
+                            onPress={() => void handleSubmitReport(vr)}
+                            disabled={submittingId === vr.id || !cloudLinked || vr.status !== 'saved'}
+                            style={[
+                              styles.submitBtn,
+                              (!cloudLinked || vr.status !== 'saved' || submittingId === vr.id) && styles.submitBtnDisabled,
+                            ]}
+                          >
+                            <Ionicons name="send-outline" size={13} color="#fff" />
+                            <Text style={styles.submitBtnText}>
+                              {submittingId === vr.id
+                                ? 'Envoi…'
+                                : vr.status !== 'saved'
+                                  ? 'Finalisez d\'abord le rapport'
+                                  : !cloudLinked
+                                    ? 'Appairage requis'
+                                    : 'Envoyer au superviseur'}
+                            </Text>
+                          </TouchableOpacity>
+                        ) : (
+                          <View style={styles.submittedInfo}>
+                            <Ionicons name="cloud-done-outline" size={13} color={C.textMuted} />
+                            <Text style={styles.submittedInfoText}>
+                              Soumis le {new Intl.DateTimeFormat('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(vr.submittedAt))}
+                            </Text>
+                          </View>
+                        )}
+                        <TouchableOpacity
+                          onPress={async () => {
+                            await deleteVoiceReport(vr.id);
+                            void refetchVoice();
+                          }}
+                          style={styles.deleteBtn}
+                        >
+                          <Ionicons name="trash-outline" size={13} color={C.red} />
+                          <Text style={styles.deleteBtnText}>Supprimer</Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
                   )}
                 </View>
@@ -277,7 +478,7 @@ export function ReportsScreen() {
                 </View>
                 <View style={styles.cardMetaRight}>
                   {r.hasData ? (
-                    <View style={[styles.kpiPill, { backgroundColor: C.greenSoft }]}>
+                    <View style={[styles.kpiPill, { backgroundColor: C.greenSoft, borderColor: '#a7f3d0' }]}>
                       <Text style={[styles.kpiPillTxt, { color: C.green }]}>
                         {r.consumptionKwh != null ? formatConsumptionKwh(r.consumptionKwh) : 'Données'}
                       </Text>
@@ -287,7 +488,7 @@ export function ReportsScreen() {
                       <Text style={[styles.kpiPillTxt, { color: C.textMuted }]}>{r.emptyLabel || 'Pas de données'}</Text>
                     </View>
                   )}
-                  <Ionicons name={isExpanded ? 'chevron-up' : 'chevron-down'} size={14} color={C.textMuted} />
+                  <Ionicons name={isExpanded ? 'chevron-up' : 'chevron-down'} size={20} color={C.textSub} />
                 </View>
               </TouchableOpacity>
 
@@ -357,67 +558,163 @@ export function ReportsScreen() {
 const styles = StyleSheet.create({
   rootWrap: { flex: 1, backgroundColor: C.bg },
   wrap: { flex: 1, backgroundColor: C.bg },
-  content: { padding: 16, paddingBottom: 100, gap: 12 },
+  content: { padding: 16, paddingBottom: 112, gap: 16 },
   center: { flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center' },
-  title: { color: C.text, fontSize: 20, fontWeight: '800' },
+  title: { color: C.text, fontSize: 22, fontWeight: '800', letterSpacing: -0.3 },
   caption: { color: C.textSub, fontSize: 13, lineHeight: 18 },
+  fabScreenHint: {
+    color: C.textMuted,
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: -4,
+    marginBottom: 4,
+  },
 
-  sectionTitle: { color: C.text, fontSize: 13, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
-  sectionCount: { color: C.textMuted, fontWeight: '400', textTransform: 'none' },
+  sectionTitle: {
+    color: C.text,
+    fontSize: 12,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginTop: 8,
+    marginBottom: 2,
+  },
+  sectionCount: { color: C.textMuted, fontWeight: '600', textTransform: 'none', letterSpacing: 0 },
 
   // Cartes notes vocales
   voiceCard: {
     backgroundColor: C.surface,
-    borderRadius: 14,
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: C.border,
-    borderLeftWidth: 3,
+    borderColor: '#e2e8f0',
+    borderLeftWidth: 4,
     borderLeftColor: C.cyan,
     overflow: 'hidden',
-    ...C.shadow,
+    ...C.shadowCard,
   },
   cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 12,
-    gap: 10,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    gap: 12,
+    backgroundColor: '#fafbfc',
   },
-  voiceIcon: { width: 32, height: 32, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  equAvatar: { width: 32, height: 32, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  equAvatarTxt: { color: C.textSub, fontSize: 14, fontWeight: '800' },
+  voiceIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  equAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  equAvatarTxt: { color: C.textSub, fontSize: 16, fontWeight: '800' },
   cardTitleRow: { flex: 1, gap: 2 },
-  cardName: { color: C.text, fontSize: 14, fontWeight: '700' },
-  cardDate: { color: C.textMuted, fontSize: 11 },
+  cardName: { color: C.text, fontSize: 16, fontWeight: '800', letterSpacing: -0.2 },
+  cardDate: { color: C.textMuted, fontSize: 12, fontWeight: '500' },
   cardMetaRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  durPill: { backgroundColor: C.cyanSoft, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
-  durTxt: { color: C.cyan, fontSize: 11, fontWeight: '700' },
-  kpiPill: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3, maxWidth: 120 },
-  kpiPillTxt: { fontSize: 11, fontWeight: '700' },
+  durPill: {
+    backgroundColor: C.cyanSoft,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderWidth: 1,
+    borderColor: '#bae6fd',
+  },
+  durTxt: { color: C.cyan, fontSize: 12, fontWeight: '800' },
+  kpiPill: { borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5, maxWidth: 140, borderWidth: 1, borderColor: C.border },
+  kpiPillTxt: { fontSize: 12, fontWeight: '800' },
 
   detail: {
     borderTopWidth: 1,
     borderTopColor: C.border,
-    padding: 14,
-    gap: 10,
+    padding: 16,
+    gap: 12,
+    backgroundColor: C.surface,
   },
   thumbRow: { marginBottom: 6 },
-  thumb: { width: 80, height: 80, borderRadius: 8, marginRight: 8, backgroundColor: C.surface2 },
+  thumb: { width: 88, height: 88, borderRadius: 12, marginRight: 10, backgroundColor: C.surface2, borderWidth: 1, borderColor: C.border },
 
   voiceTranscription: {
     color: C.textSub,
-    fontSize: 13,
+    fontSize: 14,
     fontStyle: 'italic',
-    lineHeight: 18,
+    lineHeight: 21,
+    backgroundColor: C.blueSoft,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
   },
+  extraAudioNote: { color: C.textMuted, fontSize: 12, marginTop: 4, fontWeight: '600' },
   structuredBlock: {
     backgroundColor: C.surface2,
-    borderRadius: 10,
-    padding: 12,
-    gap: 10,
+    borderRadius: 14,
+    padding: 14,
+    gap: 12,
+    borderWidth: 1,
+    borderColor: C.border,
   },
-  structSect: { gap: 4 },
-  structLabel: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
-  structItem: { color: C.textSub, fontSize: 13, lineHeight: 18, paddingLeft: 4 },
+  structSect: { gap: 6 },
+  structLabel: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.6 },
+  structItem: { color: C.textSub, fontSize: 14, lineHeight: 20, paddingLeft: 2 },
+  reviewBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  reviewBadgeTxt: { fontSize: 11, fontWeight: '700' },
+  reviewNoteBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    backgroundColor: '#fff1f2',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginTop: 4,
+  },
+  reviewNoteText: { color: C.red, fontSize: 13, lineHeight: 18, flex: 1 },
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    flexWrap: 'wrap',
+    marginTop: 4,
+  },
+  submitBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: C.blue,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  submitBtnDisabled: { backgroundColor: C.textMuted, opacity: 0.5 },
+  submitBtnText: { color: '#fff', fontSize: 13, fontWeight: '700' },
+  submittedInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  submittedInfoText: { color: C.textMuted, fontSize: 12, fontStyle: 'italic' },
   deleteBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -435,11 +732,11 @@ const styles = StyleSheet.create({
   // Cartes KPI
   card: {
     backgroundColor: C.surface,
-    borderRadius: 14,
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: C.border,
+    borderColor: '#e2e8f0',
     overflow: 'hidden',
-    ...C.shadow,
+    ...C.shadowCard,
   },
   detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   detailLabel: { color: C.textMuted, fontSize: 13, flex: 1 },

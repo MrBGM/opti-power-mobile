@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   Alert,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -8,31 +10,61 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import type { DrawerScreenProps } from '@react-navigation/drawer';
+import { useFocusEffect } from '@react-navigation/native';
 
 import { getAuthCloudApiBase, getCloudApiBase } from '@/config/env';
+import { listVoiceReports } from '@/storage/voiceReportsRepo';
 import { useAppLayout } from '@/hooks/useAppLayout';
 import type { DrawerParamList } from '@/navigation/types';
 import { useServerConfigStore } from '@/store/serverConfigStore';
+import { C } from '@/theme/colors';
 
 type Props = DrawerScreenProps<DrawerParamList, 'Settings'>;
 
 export function SettingsScreen({ navigation }: Props) {
   const layout = useAppLayout();
-  const { customIp, syncPort, authPort, setCustomIp, setSyncPort, setAuthPort, clearCustomServer } =
-    useServerConfigStore();
+  const {
+    customIp, syncPort, authPort,
+    setCustomIp, setSyncPort, setAuthPort,
+    clearCustomServer,
+  } = useServerConfigStore();
 
   const [ipInput, setIpInput] = useState(customIp ?? '');
   const [syncPortInput, setSyncPortInput] = useState(String(syncPort));
   const [authPortInput, setAuthPortInput] = useState(String(authPort));
   const [saved, setSaved] = useState(false);
+  const [perfTotal, setPerfTotal] = useState<number | null>(null);
+  const [perfWeek, setPerfWeek] = useState<number | null>(null);
+
+  const loadPerf = useCallback(async () => {
+    try {
+      const all = await listVoiceReports();
+      const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      const recent = all.filter((r) => {
+        const t = new Date(r.createdAt).getTime();
+        return !Number.isNaN(t) && t >= weekAgo;
+      }).length;
+      setPerfTotal(all.length);
+      setPerfWeek(recent);
+    } catch {
+      setPerfTotal(0);
+      setPerfWeek(0);
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadPerf();
+    }, [loadPerf]),
+  );
 
   function handleApply() {
     const ip = ipInput.trim();
-    // Accepte : "192.168.1.5" ou "192.168.1.5:3002" (on garde juste l'host)
     const host = ip.replace(/:\d+$/, '').replace(/^https?:\/\//, '');
     if (!host) {
-      Alert.alert('Adresse invalide', 'Entre une adresse IP ou un nom d\'hote valide.');
+      Alert.alert('Adresse invalide', "Entre une adresse IP ou un nom d'hote valide.");
       return;
     }
     const sp = parseInt(syncPortInput, 10);
@@ -55,7 +87,7 @@ export function SettingsScreen({ navigation }: Props) {
   function handleClear() {
     Alert.alert(
       'Reinitialiser le serveur',
-      'Retour aux URLs configurees dans .env ou via l\'appairage QR.',
+      "Retour aux URLs configurees dans .env ou via l'appairage QR.",
       [
         { text: 'Annuler', style: 'cancel' },
         {
@@ -77,26 +109,31 @@ export function SettingsScreen({ navigation }: Props) {
   const isCustomActive = !!customIp;
 
   return (
+    <KeyboardAvoidingView
+      style={{ flex: 1, backgroundColor: C.bg }}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? layout.insets.top : 0}
+    >
     <ScrollView
-      style={{ flex: 1, backgroundColor: '#020617' }}
+      style={{ flex: 1, backgroundColor: C.bg }}
       contentContainerStyle={[
         styles.wrap,
         {
           paddingHorizontal: layout.padH,
           paddingTop: layout.insets.top + layout.padV,
-          paddingBottom: layout.insets.bottom + 24,
+          paddingBottom: layout.insets.bottom + 32,
         },
       ]}
       keyboardShouldPersistTaps="handled"
     >
-      <Text style={[styles.title, { fontSize: layout.fontTitle }]}>Parametres</Text>
+      <Text style={[styles.title, { fontSize: layout.fontTitle }]}>Paramètres</Text>
 
       {/* ─── Section serveur ─────────────────────────────────────────── */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <View style={[styles.badge, isCustomActive ? styles.badgeCustom : styles.badgeAuto]}>
-            <Text style={styles.badgeText}>
-              {isCustomActive ? 'IP personnalisee' : 'Auto (QR / .env)'}
+            <Text style={[styles.badgeText, isCustomActive ? styles.badgeCustomText : styles.badgeAutoText]}>
+              {isCustomActive ? 'IP personnalisée' : 'Auto (QR / .env)'}
             </Text>
           </View>
           <Text style={styles.sectionTitle}>Configuration du serveur</Text>
@@ -118,15 +155,15 @@ export function SettingsScreen({ navigation }: Props) {
         <TextInput
           value={ipInput}
           onChangeText={(v) => { setIpInput(v); setSaved(false); }}
-          placeholder="ex: 172.20.10.2"
-          placeholderTextColor="#475569"
+          placeholder="ex: 192.168.1.5"
+          placeholderTextColor={C.textMuted}
           keyboardType="default"
           autoCapitalize="none"
           autoCorrect={false}
           style={styles.input}
         />
         <Text style={styles.hint}>
-          Entre uniquement l'IP ou le nom d'hote. Les ports sont configures ci-dessous.
+          Entre uniquement l'IP ou le nom d'hote. Les ports sont configurés ci-dessous.
         </Text>
 
         <View style={styles.portsRow}>
@@ -136,7 +173,7 @@ export function SettingsScreen({ navigation }: Props) {
               value={syncPortInput}
               onChangeText={(v) => { setSyncPortInput(v); setSaved(false); }}
               placeholder="3002"
-              placeholderTextColor="#475569"
+              placeholderTextColor={C.textMuted}
               keyboardType="numeric"
               style={styles.input}
             />
@@ -148,7 +185,7 @@ export function SettingsScreen({ navigation }: Props) {
               value={authPortInput}
               onChangeText={(v) => { setAuthPortInput(v); setSaved(false); }}
               placeholder="3001"
-              placeholderTextColor="#475569"
+              placeholderTextColor={C.textMuted}
               keyboardType="numeric"
               style={styles.input}
             />
@@ -160,82 +197,121 @@ export function SettingsScreen({ navigation }: Props) {
             onPress={handleApply}
             style={({ pressed }) => [styles.btnApply, pressed && { opacity: 0.8 }]}
           >
-            <Text style={styles.btnApplyText}>{saved ? 'Applique !' : 'Appliquer'}</Text>
+            <Text style={styles.btnApplyText}>{saved ? 'Appliqué !' : 'Appliquer'}</Text>
           </Pressable>
           {isCustomActive && (
             <Pressable
               onPress={handleClear}
               style={({ pressed }) => [styles.btnClear, pressed && { opacity: 0.8 }]}
             >
-              <Text style={styles.btnClearText}>Reinitialiser</Text>
+              <Text style={styles.btnClearText}>Réinitialiser</Text>
             </Pressable>
           )}
         </View>
 
-        <Text style={styles.infoBox}>
-          Apres avoir change de Wi-Fi, entre la nouvelle IP et tape "Appliquer".
-          Le changement est immediat, sans redemarrer l'app.
+        <View style={styles.infoBox}>
+          <Ionicons name="information-circle-outline" size={14} color={C.blue} />
+          <Text style={styles.infoBoxText}>
+            Après avoir changé de Wi-Fi, entre la nouvelle IP et tape "Appliquer".
+            Le changement est immédiat, sans redémarrer l'app.
+          </Text>
+        </View>
+      </View>
+
+      {/* ─── Performance technicien (rapports vocaux locaux) ───────────── */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Ionicons name="stats-chart-outline" size={16} color={C.blue} />
+          <Text style={styles.sectionTitle}>Ma performance</Text>
+        </View>
+        <Text style={styles.hint}>
+          Indicateurs basés sur vos rapports vocaux enregistrés sur cet appareil (hors ligne inclus).
         </Text>
+        <View style={styles.perfRow}>
+          <View style={styles.perfCard}>
+            <Text style={styles.perfValue}>{perfTotal === null ? '—' : String(perfTotal)}</Text>
+            <Text style={styles.perfLabel}>Rapports enregistrés</Text>
+          </View>
+          <View style={styles.perfCard}>
+            <Text style={styles.perfValue}>{perfWeek === null ? '—' : String(perfWeek)}</Text>
+            <Text style={styles.perfLabel}>Ces 7 derniers jours</Text>
+          </View>
+        </View>
+        <Pressable
+          onPress={() => navigation.navigate('Reports')}
+          style={({ pressed }) => [styles.link, pressed && { opacity: 0.85 }]}
+        >
+          <Ionicons name="document-text-outline" size={14} color={C.blue} />
+          <Text style={styles.linkText}>Voir mes rapports</Text>
+        </Pressable>
       </View>
 
       {/* ─── Appairage ───────────────────────────────────────────────── */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Appairage desktop</Text>
+        <View style={styles.sectionHeader}>
+          <Ionicons name="qr-code-outline" size={16} color={C.blue} />
+          <Text style={styles.sectionTitle}>Appairage desktop</Text>
+        </View>
         <Pressable
           onPress={() => navigation.navigate('Pairing')}
           style={({ pressed }) => [styles.link, pressed && { opacity: 0.85 }]}
         >
+          <Ionicons name="link-outline" size={14} color={C.blue} />
           <Text style={styles.linkText}>Appairage avec le bureau (QR / code)</Text>
         </Pressable>
       </View>
     </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   wrap: { gap: 20 },
-  title: { color: '#f8fafc', fontWeight: '800' },
+  title: { color: C.text, fontWeight: '800' },
 
   section: {
-    backgroundColor: '#0f172a',
+    backgroundColor: C.surface,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#1e293b',
+    borderColor: C.border,
     padding: 16,
     gap: 10,
+    ...C.shadow,
   },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  sectionTitle: { color: '#f8fafc', fontWeight: '700', fontSize: 14 },
+  sectionTitle: { color: C.text, fontWeight: '700', fontSize: 14 },
 
   badge: { borderRadius: 99, paddingHorizontal: 8, paddingVertical: 2 },
-  badgeCustom: { backgroundColor: '#0284c7' },
-  badgeAuto: { backgroundColor: '#1e293b' },
-  badgeText: { color: '#f0f9ff', fontSize: 10, fontWeight: '700' },
+  badgeCustom: { backgroundColor: C.blueSoft },
+  badgeAuto: { backgroundColor: C.surface2 },
+  badgeText: { fontSize: 10, fontWeight: '700' },
+  badgeCustomText: { color: C.blue },
+  badgeAutoText: { color: C.textMuted },
 
-  label: { color: '#94a3b8', fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5 },
-  hint: { color: '#475569', fontSize: 11, marginTop: -4 },
+  label: { color: C.textMuted, fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5 },
+  hint: { color: C.textSub, fontSize: 12, lineHeight: 17, marginTop: -4 },
 
   urlBox: {
-    backgroundColor: '#020617',
+    backgroundColor: C.surface2,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#1e293b',
+    borderColor: C.border,
     padding: 10,
     gap: 4,
   },
   urlRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' },
-  urlTag: { color: '#64748b', fontSize: 10, fontFamily: 'monospace', fontWeight: '700', marginRight: 4 },
-  urlMono: { color: '#38bdf8', fontSize: 12, fontFamily: 'monospace' },
+  urlTag: { color: C.textMuted, fontSize: 10, fontWeight: '700', marginRight: 4 },
+  urlMono: { color: C.blue, fontSize: 12 },
 
   input: {
     borderWidth: 1,
-    borderColor: '#1e293b',
-    borderRadius: 8,
+    borderColor: C.border,
+    borderRadius: 10,
     paddingHorizontal: 12,
-    paddingVertical: 10,
-    color: '#f8fafc',
+    paddingVertical: 11,
+    color: C.text,
     fontSize: 14,
-    backgroundColor: '#020617',
+    backgroundColor: C.bg,
   },
 
   portsRow: { flexDirection: 'row' },
@@ -243,7 +319,7 @@ const styles = StyleSheet.create({
   btnRow: { flexDirection: 'row', gap: 10 },
   btnApply: {
     flex: 1,
-    backgroundColor: '#2563eb',
+    backgroundColor: C.blue,
     borderRadius: 10,
     alignItems: 'center',
     paddingVertical: 12,
@@ -251,34 +327,52 @@ const styles = StyleSheet.create({
   btnApplyText: { color: '#fff', fontWeight: '700', fontSize: 13 },
   btnClear: {
     flex: 1,
-    backgroundColor: '#0f172a',
+    backgroundColor: C.redSoft,
     borderRadius: 10,
     alignItems: 'center',
     paddingVertical: 12,
     borderWidth: 1,
-    borderColor: '#dc2626',
+    borderColor: '#fca5a5',
   },
-  btnClearText: { color: '#f87171', fontWeight: '700', fontSize: 13 },
+  btnClearText: { color: C.red, fontWeight: '700', fontSize: 13 },
 
   infoBox: {
-    backgroundColor: '#0c1a2e',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: C.blueSoft,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#1e3a5f',
+    borderColor: C.border,
     padding: 10,
-    color: '#7dd3fc',
-    fontSize: 12,
-    lineHeight: 17,
   },
+  infoBoxText: { color: C.blue, fontSize: 12, lineHeight: 17, flex: 1 },
 
   link: {
-    backgroundColor: '#020617',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: C.blueSoft,
     borderWidth: 1,
-    borderColor: '#1e293b',
+    borderColor: C.border,
     paddingVertical: 12,
     paddingHorizontal: 16,
     borderRadius: 12,
     alignSelf: 'flex-start',
   },
-  linkText: { color: '#93c5fd', fontWeight: '700', fontSize: 13 },
+  linkText: { color: C.blue, fontWeight: '700', fontSize: 13 },
+
+  perfRow: { flexDirection: 'row', gap: 10 },
+  perfCard: {
+    flex: 1,
+    backgroundColor: C.surface2,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: C.border,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+  },
+  perfValue: { color: C.text, fontSize: 22, fontWeight: '800' },
+  perfLabel: { color: C.textMuted, fontSize: 11, fontWeight: '600', marginTop: 4, textAlign: 'center' },
 });

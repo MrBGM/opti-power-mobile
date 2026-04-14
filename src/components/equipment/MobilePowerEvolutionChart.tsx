@@ -1,4 +1,4 @@
-import { Polyline, Svg } from 'react-native-svg';
+import { Polyline, Rect, Svg } from 'react-native-svg';
 
 export type PowerSeriesPoint = {
   active?: number;
@@ -69,15 +69,27 @@ export function MobilePowerEvolutionChart({
 }) {
   const pad = 10;
   const a = buildPolylineCoords(series, 'active', width, height, pad);
-  const r = buildPolylineCoords(series, 'reactive', width, height, pad);
+  const rLine = buildPolylineCoords(series, 'reactive', width, height, pad);
   const p = buildPolylineCoords(series, 'apparent', width, height, pad);
 
-  if (!a && !r && !p) return null;
+  if (!a && !rLine && !p) return null;
 
+  const cornerR = 10;
   return (
     <Svg width={width} height={height}>
+      <Rect
+        x={0.5}
+        y={0.5}
+        width={width - 1}
+        height={height - 1}
+        rx={cornerR}
+        ry={cornerR}
+        fill="#ffffff"
+        stroke="#e2e8f0"
+        strokeWidth={1}
+      />
       {a ? <Polyline points={a} fill="none" stroke={C_ACTIVE} strokeWidth={2.2} /> : null}
-      {r ? <Polyline points={r} fill="none" stroke={C_REACTIVE} strokeWidth={2.2} /> : null}
+      {rLine ? <Polyline points={rLine} fill="none" stroke={C_REACTIVE} strokeWidth={2.2} /> : null}
       {p ? <Polyline points={p} fill="none" stroke={C_APPARENT} strokeWidth={2.2} /> : null}
     </Svg>
   );

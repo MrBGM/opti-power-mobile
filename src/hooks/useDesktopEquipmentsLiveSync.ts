@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 
 import { fetchMobileEquipmentsSnapshot } from '@/api/mobileSync';
+import { replaceDesktopAlertsSnapshot } from '@/storage/alertsRepo';
 import { replaceDesktopKpisAndStats } from '@/storage/desktopSyncRepo';
 import { dtoToEquipment, replaceDesktopEquipmentsSnapshot } from '@/storage/equipmentsRepo';
 import { useMobileSnapshotSyncStore } from '@/store/mobileSnapshotSyncStore';
@@ -27,9 +28,11 @@ async function applySnapshotIfNewer(
     const eqs = snap.equipments.map(dtoToEquipment);
     await replaceDesktopEquipmentsSnapshot(eqs);
     await replaceDesktopKpisAndStats(snap.kpisByEquipmentId, snap.measurementStatsByEquipmentId);
+    await replaceDesktopAlertsSnapshot(snap.alertsSnapshot ?? []);
     usePairingStore.getState().setLastEquipmentsRevision(snap.revision);
     await queryClient.invalidateQueries({ queryKey: ['local', 'equipments'] });
     await queryClient.invalidateQueries({ queryKey: ['local', 'desktop-kpi-bundle'] });
+    await queryClient.invalidateQueries({ queryKey: ['local', 'alerts'] });
     syncUi.endPullSuccess();
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Erreur de synchronisation';

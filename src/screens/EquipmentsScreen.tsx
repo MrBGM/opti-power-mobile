@@ -346,17 +346,17 @@ const styles = StyleSheet.create({
   },
   btnTxt: { color: '#fff', fontSize: 13, fontWeight: '700' },
 
-  list: { gap: 10, paddingHorizontal: 16, paddingBottom: 32 },
+  list: { gap: 14, paddingHorizontal: 16, paddingBottom: 32 },
 
   card: {
     backgroundColor: C.surface,
-    borderRadius: 16,
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: C.border,
+    borderColor: '#e2e8f0',
     overflow: 'hidden',
-    ...C.shadow,
+    ...C.shadowCard,
   },
-  cardHeader: { flexDirection: 'row', alignItems: 'flex-start', padding: 14, gap: 12 },
+  cardHeader: { flexDirection: 'row', alignItems: 'flex-start', padding: 16, gap: 12, backgroundColor: '#fafbfc' },
   avatar: {
     width: 44,
     height: 44,

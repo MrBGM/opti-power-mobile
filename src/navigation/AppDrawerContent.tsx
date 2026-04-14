@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { DrawerContentScrollView, type DrawerContentComponentProps } from '@react-navigation/drawer';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { AppBrandLogo } from '@/components/branding/AppBrandLogo';
 import type { DrawerParamList } from '@/navigation/types';
 import type { UserRole } from '@/lib/authApi';
 import { useAuthStore } from '@/store/authStore';
@@ -29,13 +30,12 @@ type Item = {
 };
 
 const ITEMS: Item[] = [
-  { name: 'Dashboard', label: 'Tableau de bord', icon: 'home-outline' },
-  { name: 'Equipments', label: 'Équipements', icon: 'flash-outline' },
-  { name: 'Import', label: 'Importer données', icon: 'cloud-upload-outline', minRole: 'operator' },
-  { name: 'Analytics', label: 'Analyses', icon: 'bar-chart-outline', minRole: 'manager' },
-  { name: 'Alerts', label: 'Alertes', icon: 'warning-outline' },
-  { name: 'AIInsights', label: 'IA / Prédictions', icon: 'bulb-outline' },
-  { name: 'Reports', label: 'Rapports', icon: 'document-text-outline' },
+  { name: 'Dashboard',  label: 'Tableau de bord', icon: 'home-outline' },
+  { name: 'Equipments', label: 'Équipements',      icon: 'flash-outline' },
+  { name: 'Analytics',  label: 'Analyses',          icon: 'bar-chart-outline' },
+  { name: 'Alerts',     label: 'Alertes',            icon: 'warning-outline' },
+  { name: 'Reports',    label: 'Rapports',           icon: 'document-text-outline' },
+  { name: 'Profile',    label: 'Mon profil',         icon: 'person-circle-outline' },
 ];
 
 export function AppDrawerContent(props: DrawerContentComponentProps) {
@@ -60,7 +60,7 @@ export function AppDrawerContent(props: DrawerContentComponentProps) {
       {/* Logo */}
       <View style={styles.header}>
         <View style={styles.logoBox}>
-          <Ionicons name="flash" size={20} color="#fff" />
+          <AppBrandLogo size={36} overscan={1.14} />
         </View>
         <Text style={styles.headerTitle}>Opti Power</Text>
       </View>
@@ -175,12 +175,14 @@ const styles = StyleSheet.create({
     borderBottomColor: C.border,
   },
   logoBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: C.blue,
+    width: 42,
+    height: 42,
+    borderRadius: 11,
+    backgroundColor: C.surface2,
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: C.border,
   },
   headerTitle: { color: C.text, fontSize: 16, fontWeight: '800' },
 

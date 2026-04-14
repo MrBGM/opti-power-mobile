@@ -10,6 +10,8 @@ import {
   View,
 } from 'react-native';
 
+import { C } from '@/theme/colors';
+
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
@@ -23,7 +25,7 @@ type Props = {
 };
 
 /**
- * Carte section repliable (animation layout) — une info à la fois, interface épurée.
+ * Carte section repliable — thème clair aligné sur le reste de l'app (lisibilité, graphiques).
  */
 export function CollapsibleSection({ title, subtitle, defaultExpanded = false, children, badge }: Props) {
   const [open, setOpen] = useState(defaultExpanded);
@@ -53,7 +55,7 @@ export function CollapsibleSection({ title, subtitle, defaultExpanded = false, c
           </View>
           {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
         </View>
-        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={22} color="#94a3b8" />
+        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={22} color={C.textMuted} />
       </Pressable>
       {open ? <View style={styles.body}>{children}</View> : null}
     </View>
@@ -64,9 +66,10 @@ const styles = StyleSheet.create({
   wrap: {
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#1e293b',
-    backgroundColor: '#0B1220',
+    borderColor: C.border,
+    backgroundColor: C.surface,
     overflow: 'hidden',
+    ...C.shadow,
   },
   header: {
     flexDirection: 'row',
@@ -76,28 +79,31 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     gap: 12,
   },
-  headerPressed: { backgroundColor: 'rgba(30, 41, 59, 0.5)' },
+  headerPressed: { backgroundColor: C.blueSoft },
   headerText: { flex: 1, gap: 4 },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   title: {
-    color: '#f1f5f9',
+    color: C.text,
     fontSize: 15,
     fontWeight: '800',
   },
-  subtitle: { color: '#64748b', fontSize: 12, lineHeight: 17 },
+  subtitle: { color: C.textMuted, fontSize: 12, lineHeight: 17 },
   badge: {
-    backgroundColor: 'rgba(99, 102, 241, 0.2)',
+    backgroundColor: C.purpleSoft,
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 8,
+    borderWidth: 1,
+    borderColor: C.border,
   },
-  badgeTxt: { color: '#a5b4fc', fontSize: 10, fontWeight: '800' },
+  badgeTxt: { color: C.purpleText, fontSize: 10, fontWeight: '800' },
   body: {
     paddingHorizontal: 14,
     paddingBottom: 14,
     paddingTop: 0,
     gap: 10,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(30, 41, 59, 0.8)',
+    borderTopColor: C.border,
+    backgroundColor: C.surface2,
   },
 });

@@ -64,6 +64,14 @@ export const C = {
     shadowRadius: 8,
     elevation: 4,
   },
+  /** Cartes listes (Rapports, Analyses, dashboard) — relief plus lisible */
+  shadowCard: {
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    elevation: 7,
+  },
 } as const;
 
 /** Couleur semantique selon le statut KPI */

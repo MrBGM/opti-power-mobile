@@ -3,7 +3,10 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import {
   Alert,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -12,6 +15,7 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
+import { AppBrandLogo } from '@/components/branding/AppBrandLogo';
 import { getAuthCloudApiBase } from '@/config/env';
 import { useLogin } from '@/features/auth/useLogin';
 import type { AuthStackParamList } from '@/navigation/types';
@@ -91,26 +95,33 @@ export function LoginScreen() {
   const isCustom = !!customIp;
 
   return (
-    /* Fond dégradé identique au desktop (mode clair) */
-    <LinearGradient
-      colors={['#dbeafe', '#ede9fe', '#cffafe']}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={styles.screen}
-    >
-      {/* Grille CSS */}
-      <GridOverlay />
-
-      {/* Halo central */}
+    <View style={styles.root}>
+      <LinearGradient
+        colors={['#dbeafe', '#ede9fe', '#cffafe']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFill}
+      />
+      <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+        <GridOverlay />
+      </View>
       <View style={styles.halo} pointerEvents="none" />
 
-      {/* Carte glassmorphism */}
-      <View style={styles.card}>
-
+      <KeyboardAvoidingView
+        style={styles.keyboardRoot}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.card}>
         {/* Logo + titre */}
         <View style={styles.logoRow}>
           <View style={styles.logoBox}>
-            <Ionicons name="flash" size={28} color="#fff" />
+            <AppBrandLogo size={52} overscan={1.1} />
           </View>
           <View>
             <Text style={styles.title}>Opti Power</Text>
@@ -243,17 +254,24 @@ export function LoginScreen() {
             </View>
           </View>
         )}
-      </View>
-    </LinearGradient>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    alignItems: 'center',
+  root: { flex: 1, backgroundColor: '#dbeafe' },
+  keyboardRoot: { flex: 1 },
+  scrollContent: {
+    flexGrow: 1,
+    minHeight: '100%',
     justifyContent: 'center',
+    alignItems: 'center',
     padding: 20,
+    paddingVertical: 28,
+    paddingBottom: 36,
   },
 
   // Halo central
@@ -289,15 +307,18 @@ const styles = StyleSheet.create({
   // Logo
   logoRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 4 },
   logoBox: {
-    width: 52,
-    height: 52,
+    width: 60,
+    height: 60,
     borderRadius: 14,
-    backgroundColor: C.blue,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: C.blue,
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.35)',
+    shadowColor: '#0f172a',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.45,
+    shadowOpacity: 0.12,
     shadowRadius: 12,
     elevation: 6,
   },

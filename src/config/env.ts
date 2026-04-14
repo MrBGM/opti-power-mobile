@@ -1,6 +1,19 @@
 import { getPairedAuthApiBase, getPairedCloudApiBase } from '@/store/pairingStore';
 import { getCustomAuthBase, getCustomSyncBase } from '@/store/serverConfigStore';
 
+/** URL de type loopback dans le QR (sync sans SYNC_PUBLIC_URL) — inutilisable depuis le téléphone. */
+function isLoopbackApiUrl(url: string): boolean {
+  const trimmed = url.trim();
+  try {
+    const withProto = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+    const u = new URL(withProto);
+    const h = u.hostname.toLowerCase();
+    return h === 'localhost' || h === '127.0.0.1' || h === '[::1]';
+  } catch {
+    return trimmed.includes('localhost') || trimmed.includes('127.0.0.1');
+  }
+}
+
 /**
  * Base URL du sync-service (sans slash final).
  * Priorite :
@@ -13,7 +26,9 @@ export function getCloudApiBase(): string {
   const fromCustom = getCustomSyncBase();
   if (fromCustom) return fromCustom;
 
-  const fromPairing = getPairedCloudApiBase();
+  const fromPairingRaw = getPairedCloudApiBase();
+  const fromPairing =
+    fromPairingRaw && !isLoopbackApiUrl(fromPairingRaw) ? fromPairingRaw.replace(/\/$/, '') : null;
   const fromEnv =
     (typeof process !== 'undefined' &&
       (process.env?.EXPO_PUBLIC_SYNC_API_URL?.trim() ||
@@ -35,7 +50,9 @@ export function getAuthCloudApiBase(): string {
   const fromCustom = getCustomAuthBase();
   if (fromCustom) return fromCustom;
 
-  const fromPairing = getPairedAuthApiBase();
+  const fromPairingRaw = getPairedAuthApiBase();
+  const fromPairing =
+    fromPairingRaw && !isLoopbackApiUrl(fromPairingRaw) ? fromPairingRaw.replace(/\/$/, '') : null;
   if (fromPairing) return fromPairing;
 
   const fromEnv =

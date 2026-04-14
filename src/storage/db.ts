@@ -102,6 +102,22 @@ async function ensureVoiceReportColumns(db: Db): Promise<void> {
   if (!names.has('image_uris')) {
     await db.execAsync("ALTER TABLE voice_reports ADD COLUMN image_uris TEXT NOT NULL DEFAULT '[]';");
   }
+  if (!names.has('extra_audio_uris')) {
+    await db.execAsync("ALTER TABLE voice_reports ADD COLUMN extra_audio_uris TEXT NOT NULL DEFAULT '[]';");
+  }
+  // Champs de soumission au superviseur (cloud report chain)
+  if (!names.has('cloud_report_id')) {
+    await db.execAsync('ALTER TABLE voice_reports ADD COLUMN cloud_report_id TEXT;');
+  }
+  if (!names.has('submitted_at')) {
+    await db.execAsync('ALTER TABLE voice_reports ADD COLUMN submitted_at TEXT;');
+  }
+  if (!names.has('review_status')) {
+    await db.execAsync('ALTER TABLE voice_reports ADD COLUMN review_status TEXT;');
+  }
+  if (!names.has('review_note')) {
+    await db.execAsync('ALTER TABLE voice_reports ADD COLUMN review_note TEXT;');
+  }
 }
 
 async function ensureEquipmentColumns(db: Db): Promise<void> {

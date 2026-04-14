@@ -6,6 +6,7 @@
  * - Sauvegarde en SQLite (table voice_reports)
  */
 import { useEffect, useRef, useState } from 'react';
+import { Audio } from 'expo-av';
 import * as ImagePicker from 'expo-image-picker';
 import {
   ActivityIndicator,
@@ -19,14 +20,20 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
+import { MaintenanceReportCharts } from '@/components/MaintenanceReportCharts';
 import { fmtDuration, structuredReportIsEmpty, structureTranscription } from '@/lib/reportStructurer';
+import { structureTranscriptionSmart } from '@/lib/reportLlmStructure';
+import { transcribeAudio } from '@/lib/whisperTranscribe';
 import { useVoiceRecorder } from '@/hooks/useVoiceRecorder';
 import { saveVoiceReport } from '@/storage/voiceReportsRepo';
 import type { StructuredReport } from '@/storage/voiceReportsRepo';
+import { resolveTranscribeKey, useServerConfigStore } from '@/store/serverConfigStore';
 import { C } from '@/theme/colors';
 
 interface Equipment {
@@ -39,6 +46,8 @@ interface Props {
   equipments: Equipment[];
   onSaved?: () => void;
 }
+
+type AudioSegment = { uri: string; durationMs: number };
 
 function genId(): string {
   return `vr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
@@ -75,10 +84,20 @@ function StructuredSection({ title, items, color }: { title: string; items: stri
 }
 
 export function VoiceNoteBar({ equipments, onSaved }: Props) {
+  const insets = useSafeAreaInsets();
+  const { width: winW } = useWindowDimensions();
   const recorder = useVoiceRecorder();
+  const transcribeProvider = useServerConfigStore((s) => s.transcribeProvider);
+  const activeApiKey = resolveTranscribeKey(transcribeProvider);
 
   const [modalVisible, setModalVisible] = useState(false);
+  const [audioSegments, setAudioSegments] = useState<AudioSegment[]>([]);
   const [transcription, setTranscription] = useState('');
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isStructuring, setIsStructuring] = useState(false);
+  const [structureError, setStructureError] = useState<string | null>(null);
+  const [structureSource, setStructureSource] = useState<'llm' | 'local' | null>(null);
+  const [transcribeError, setTranscribeError] = useState<string | null>(null);
   const [structured, setStructured] = useState<StructuredReport | null>(null);
   const [selectedEquip, setSelectedEquip] = useState<Equipment | null>(null);
   const [saving, setSaving] = useState(false);
@@ -86,17 +105,106 @@ export function VoiceNoteBar({ equipments, onSaved }: Props) {
   const [showEquipList, setShowEquipList] = useState(false);
   const [imageUris, setImageUris] = useState<string[]>([]);
   const durationRef = useRef(0);
+  const segmentSoundRef = useRef<Audio.Sound | null>(null);
+  const [playingSegmentUri, setPlayingSegmentUri] = useState<string | null>(null);
+  /** True entre « Complément audio » et la fin de transcription du nouveau clip. */
+  const [supplementMode, setSupplementMode] = useState(false);
+
+  useEffect(() => {
+    const uri = recorder.audioUri;
+    if (!modalVisible || !uri || recorder.state !== 'stopped') return;
+    setAudioSegments((prev) => {
+      if (prev.length > 0) return prev;
+      return [{ uri, durationMs: recorder.durationMs || durationRef.current }];
+    });
+  }, [modalVisible, recorder.audioUri, recorder.state, recorder.durationMs]);
+
+  useEffect(() => {
+    return () => {
+      void segmentSoundRef.current?.unloadAsync().catch(() => {});
+      segmentSoundRef.current = null;
+    };
+  }, []);
+
+  async function stopSegmentPlayback() {
+    if (segmentSoundRef.current) {
+      await segmentSoundRef.current.stopAsync().catch(() => {});
+      await segmentSoundRef.current.unloadAsync().catch(() => {});
+      segmentSoundRef.current = null;
+    }
+    setPlayingSegmentUri(null);
+  }
+
+  async function playSegment(uri: string) {
+    if (!uri) return;
+    try {
+      await recorder.stopPlayback();
+      await stopSegmentPlayback();
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true });
+      const { sound } = await Audio.Sound.createAsync({ uri });
+      segmentSoundRef.current = sound;
+      setPlayingSegmentUri(uri);
+      await sound.playAsync();
+      sound.setOnPlaybackStatusUpdate((st) => {
+        if (st.isLoaded && st.didJustFinish) {
+          void sound.unloadAsync().catch(() => {});
+          if (segmentSoundRef.current === sound) segmentSoundRef.current = null;
+          setPlayingSegmentUri(null);
+        }
+      });
+    } catch {
+      setPlayingSegmentUri(null);
+    }
+  }
 
   async function handleMicPress() {
     if (recorder.state === 'recording') {
       const uri = await recorder.stopRecording();
       durationRef.current = recorder.durationMs;
+
+      if (supplementMode && modalVisible) {
+        if (!uri) {
+          setSupplementMode(false);
+          return;
+        }
+        setSupplementMode(false);
+        setAudioSegments((prev) => [...prev, { uri, durationMs: recorder.durationMs || durationRef.current }]);
+        setStructured(null);
+        setStructureSource(null);
+        if (activeApiKey) {
+          setIsTranscribing(true);
+          const result = await transcribeAudio(uri, { provider: transcribeProvider, apiKey: activeApiKey }, 'fr');
+          setIsTranscribing(false);
+          if ('text' in result && result.text) {
+            setTranscription((t) => (t.trim() ? `${t.trim()}\n\n--- Complément audio ---\n\n` : '') + result.text);
+          } else {
+            setTranscribeError(result.error ?? 'Erreur de transcription du complément');
+          }
+        }
+        return;
+      }
+
       setTranscription('');
       setStructured(null);
       setSavedOk(false);
       setImageUris([]);
-      if (uri) setModalVisible(true);
+      setTranscribeError(null);
+      if (uri) {
+        setAudioSegments([{ uri, durationMs: durationRef.current }]);
+        setModalVisible(true);
+        if (activeApiKey) {
+          setIsTranscribing(true);
+          const result = await transcribeAudio(uri, { provider: transcribeProvider, apiKey: activeApiKey }, 'fr');
+          setIsTranscribing(false);
+          if ('text' in result && result.text) {
+            setTranscription(result.text);
+          } else {
+            setTranscribeError(result.error ?? 'Erreur de transcription');
+          }
+        }
+      }
     } else if (recorder.state === 'idle' || recorder.state === 'stopped') {
+      if (modalVisible && !supplementMode) return;
       await recorder.startRecording();
     }
   }
@@ -125,9 +233,41 @@ export function VoiceNoteBar({ equipments, onSaved }: Props) {
     setImageUris((prev) => prev.filter((u) => u !== uri));
   }
 
-  function handleStructure() {
+  async function handleStructure() {
     if (!transcription.trim()) return;
-    setStructured(structureTranscription(transcription));
+    setStructureError(null);
+    setIsStructuring(true);
+    setStructureSource(null);
+    try {
+      const opts = activeApiKey
+        ? { provider: transcribeProvider, apiKey: activeApiKey }
+        : null;
+      const { report, source } = await structureTranscriptionSmart(transcription, opts);
+      setStructured(report);
+      setStructureSource(source);
+    } catch {
+      setStructured(structureTranscription(transcription));
+      setStructureSource('local');
+      setStructureError('Structuration IA indisponible — version locale appliquée.');
+    } finally {
+      setIsStructuring(false);
+    }
+  }
+
+  async function handleAppendAudioSupplement() {
+    if (!activeApiKey) {
+      setTranscribeError('Ajoutez EXPO_PUBLIC_GROQ_API_KEY ou EXPO_PUBLIC_OPENAI_API_KEY pour transcrire un complément audio.');
+      return;
+    }
+    if (isTranscribing || isStructuring) return;
+    await stopSegmentPlayback();
+    await recorder.stopPlayback();
+    setTranscribeError(null);
+    setStructured(null);
+    setStructureSource(null);
+    setSupplementMode(true);
+    await recorder.resetRecorder();
+    await recorder.startRecording();
   }
 
   async function handleSave() {
@@ -135,14 +275,17 @@ export function VoiceNoteBar({ equipments, onSaved }: Props) {
     try {
       const now = new Date().toISOString();
       const struct = structured ?? structureTranscription(transcription);
+      const segs = audioSegments.length > 0 ? audioSegments : (recorder.audioUri ? [{ uri: recorder.audioUri, durationMs: recorder.durationMs || durationRef.current }] : []);
+      const totalDur = segs.reduce((a, s) => a + s.durationMs, 0) || recorder.durationMs || durationRef.current;
       await saveVoiceReport({
         id: genId(),
         equipmentId: selectedEquip?.id ?? null,
         equipmentName: selectedEquip?.name ?? null,
-        audioUri: recorder.audioUri,
+        audioUri: segs[0]?.uri ?? recorder.audioUri,
+        extraAudioUris: segs.slice(1).map((s) => s.uri),
         transcription,
         structuredJson: struct,
-        durationMs: recorder.durationMs || durationRef.current,
+        durationMs: totalDur,
         imageUris,
         status: 'saved',
         createdAt: now,
@@ -152,11 +295,17 @@ export function VoiceNoteBar({ equipments, onSaved }: Props) {
       setTimeout(() => {
         setModalVisible(false);
         recorder.resetRecorder();
+        void stopSegmentPlayback();
+        setAudioSegments([]);
         setTranscription('');
         setStructured(null);
         setSelectedEquip(null);
         setImageUris([]);
         setSavedOk(false);
+        setTranscribeError(null);
+        setStructureError(null);
+        setStructureSource(null);
+        setSupplementMode(false);
         onSaved?.();
       }, 1200);
     } catch { /* silencieux */ } finally {
@@ -166,66 +315,75 @@ export function VoiceNoteBar({ equipments, onSaved }: Props) {
 
   function handleCloseModal() {
     setModalVisible(false);
+    void stopSegmentPlayback();
     recorder.resetRecorder();
+    setAudioSegments([]);
     setTranscription('');
     setStructured(null);
     setSelectedEquip(null);
     setImageUris([]);
     setSavedOk(false);
+    setTranscribeError(null);
+    setStructureError(null);
+    setStructureSource(null);
+    setSupplementMode(false);
   }
 
   const isRecording = recorder.state === 'recording';
   const isPlaying = recorder.state === 'playing';
 
+  const displaySegments: AudioSegment[] =
+    audioSegments.length > 0
+      ? audioSegments
+      : recorder.audioUri && recorder.state === 'stopped'
+        ? [{ uri: recorder.audioUri, durationMs: recorder.durationMs || durationRef.current }]
+        : [];
+  const totalSegDur = displaySegments.reduce((a, s) => a + s.durationMs, 0);
+
+  const hasDraftAudio = recorder.state === 'stopped' && Boolean(recorder.audioUri);
+
   return (
     <>
-      {/* ── Barre fixe en bas ───────────────────────────────────── */}
-      <View style={styles.bar}>
-        <View style={styles.barInner}>
-          <View style={styles.barLeft}>
-            {isRecording ? (
-              <>
-                <RecordingDot />
-                <Text style={styles.barTimerText}>{fmtDuration(recorder.durationMs)}</Text>
-                <Text style={styles.barHint}>Enregistrement en cours...</Text>
-              </>
-            ) : (
-              <Text style={styles.barHint}>
-                {recorder.state === 'stopped'
-                  ? 'Enregistrement prêt'
-                  : 'Appuie pour enregistrer une note vocale'}
-              </Text>
-            )}
+      {/* ── Micro flottant (FAB) — ne masque plus la liste des rapports ── */}
+      <View style={[styles.fabWrap, { paddingBottom: Math.max(insets.bottom + 12, 20) }]} pointerEvents="box-none">
+        {isRecording ? (
+          <View style={styles.recPill}>
+            <RecordingDot />
+            <Text style={styles.recPillTime}>{fmtDuration(recorder.durationMs)}</Text>
+            <Text style={styles.recPillHint} numberOfLines={1}>
+              {supplementMode && modalVisible ? 'Complément — Stop' : 'Enregistrement…'}
+            </Text>
           </View>
-
-          {recorder.state === 'stopped' && recorder.audioUri ? (
-            <Pressable
-              onPress={() => setModalVisible(true)}
-              style={({ pressed }) => [styles.openBtn, pressed && { opacity: 0.8 }]}
-            >
-              <Text style={styles.openBtnText}>Ouvrir</Text>
-            </Pressable>
-          ) : null}
-
-          <Pressable
-            onPress={handleMicPress}
-            style={({ pressed }) => [
-              styles.micBtn,
-              isRecording && styles.micBtnRecording,
-              pressed && { opacity: 0.8 },
-            ]}
-          >
-            {isRecording ? (
-              <Ionicons name="stop" size={18} color={C.red} />
-            ) : (
-              <Ionicons name="mic" size={20} color={C.blue} />
-            )}
-          </Pressable>
-        </View>
+        ) : null}
 
         {recorder.error ? (
-          <Text style={styles.barError}>{recorder.error}</Text>
+          <Text style={styles.fabError} numberOfLines={2}>{recorder.error}</Text>
         ) : null}
+
+        <Pressable
+          onPress={hasDraftAudio ? () => setModalVisible(true) : handleMicPress}
+          style={({ pressed }) => [
+            styles.fabMain,
+            isRecording && styles.fabMainRecording,
+            hasDraftAudio && !isRecording && styles.fabMainDraft,
+            pressed && { opacity: 0.92 },
+          ]}
+          accessibilityLabel={
+            isRecording
+              ? 'Arrêter l’enregistrement'
+              : hasDraftAudio
+                ? 'Ouvrir la note vocale'
+                : 'Démarrer un enregistrement vocal'
+          }
+        >
+          {isRecording ? (
+            <Ionicons name="stop" size={26} color={C.red} />
+          ) : hasDraftAudio ? (
+            <Ionicons name="document-text" size={26} color={C.blue} />
+          ) : (
+            <Ionicons name="mic" size={28} color="#fff" />
+          )}
+        </Pressable>
       </View>
 
       {/* ── Modal ───────────────────────────────────────────────── */}
@@ -252,22 +410,56 @@ export function VoiceNoteBar({ equipments, onSaved }: Props) {
               </Pressable>
             </View>
 
-            {/* Durée + lecture */}
+            {supplementMode && isRecording ? (
+              <View style={styles.supplementBanner}>
+                <Ionicons name="mic" size={16} color={C.purple} />
+                <Text style={styles.supplementBannerText}>
+                  Complément audio : parle puis appuie sur Stop (bouton rouge flottant) pour transcrire et fusionner au texte.
+                </Text>
+              </View>
+            ) : null}
+
+            {/* Durée + lecture (une ou plusieurs pistes) */}
             <View style={styles.audioRow}>
               <View style={styles.audioPill}>
                 <Ionicons name="mic" size={14} color={C.cyan} />
                 <Text style={styles.audioPillText}>
-                  {fmtDuration(recorder.durationMs || durationRef.current)}
+                  {fmtDuration(totalSegDur || recorder.durationMs || durationRef.current)}
+                  {displaySegments.length > 1 ? ` · ${displaySegments.length} pistes` : ''}
                 </Text>
               </View>
-              <Pressable
-                onPress={isPlaying ? recorder.stopPlayback : recorder.playRecording}
-                style={({ pressed }) => [styles.playBtn, pressed && { opacity: 0.8 }]}
-                disabled={!recorder.audioUri}
-              >
-                <Ionicons name={isPlaying ? 'stop-circle' : 'play-circle'} size={16} color="#fff" />
-                <Text style={styles.playBtnText}>{isPlaying ? 'Stop' : 'Écouter'}</Text>
-              </Pressable>
+              {displaySegments.length <= 1 ? (
+                <Pressable
+                  onPress={async () => {
+                    await stopSegmentPlayback();
+                    if (isPlaying) await recorder.stopPlayback();
+                    else await recorder.playRecording();
+                  }}
+                  style={({ pressed }) => [styles.playBtn, pressed && { opacity: 0.8 }]}
+                  disabled={!recorder.audioUri && displaySegments.length === 0}
+                >
+                  <Ionicons name={isPlaying ? 'stop-circle' : 'play-circle'} size={16} color="#fff" />
+                  <Text style={styles.playBtnText}>{isPlaying ? 'Stop' : 'Écouter'}</Text>
+                </Pressable>
+              ) : (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.trackScroll}>
+                  {displaySegments.map((seg, idx) => {
+                    const active = playingSegmentUri === seg.uri;
+                    return (
+                      <Pressable
+                        key={`${seg.uri}-${idx}`}
+                        onPress={() => (active ? void stopSegmentPlayback() : void playSegment(seg.uri))}
+                        style={({ pressed }) => [styles.trackChip, active && styles.trackChipOn, pressed && { opacity: 0.85 }]}
+                      >
+                        <Ionicons name={active ? 'stop-circle' : 'play-circle'} size={14} color={active ? '#fff' : C.blue} />
+                        <Text style={[styles.trackChipTxt, active && styles.trackChipTxtOn]}>
+                          Piste {idx + 1} · {fmtDuration(seg.durationMs)}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              )}
             </View>
 
             {/* Sélection équipement */}
@@ -308,38 +500,118 @@ export function VoiceNoteBar({ equipments, onSaved }: Props) {
 
             {/* Transcription */}
             <Text style={styles.fieldLabel}>Transcription / observations</Text>
-            <TextInput
-              value={transcription}
-              onChangeText={(v) => { setTranscription(v); setStructured(null); }}
-              placeholder="Tape ou colle ici la transcription de ta note vocale..."
-              placeholderTextColor={C.textMuted}
-              multiline
-              textAlignVertical="top"
-              style={styles.transcriptionInput}
-            />
+            {isTranscribing ? (
+              <View style={styles.transcribingBox}>
+                <ActivityIndicator size="small" color={C.blue} />
+                <Text style={styles.transcribingText}>Transcription en cours...</Text>
+              </View>
+            ) : (
+              <>
+                {transcribeError ? (
+                  <View style={styles.transcribeErrorBox}>
+                    <Ionicons name="warning-outline" size={14} color={C.amber} />
+                    <Text style={styles.transcribeErrorText}>{transcribeError}</Text>
+                  </View>
+                ) : null}
+                <TextInput
+                  value={transcription}
+                  onChangeText={(v) => {
+                    setTranscription(v);
+                    setStructured(null);
+                    setStructureSource(null);
+                  }}
+                  placeholder={
+                    activeApiKey
+                      ? `Transcription ${transcribeProvider === 'groq' ? 'Groq' : 'OpenAI'} automatique...`
+                      : 'Définir EXPO_PUBLIC_GROQ_API_KEY ou EXPO_PUBLIC_OPENAI_API_KEY — ou saisir la transcription'
+                  }
+                  placeholderTextColor={C.textMuted}
+                  multiline
+                  textAlignVertical="top"
+                  style={styles.transcriptionInput}
+                />
+              </>
+            )}
+
+            <Pressable
+              onPress={handleAppendAudioSupplement}
+              disabled={!transcription.trim() || isTranscribing || isStructuring || isRecording}
+              style={({ pressed }) => [
+                styles.supplementBtn,
+                (!transcription.trim() || isTranscribing || isStructuring || isRecording) && styles.structureBtnDisabled,
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Ionicons name="add-circle-outline" size={16} color={C.cyan} />
+              <Text style={styles.supplementBtnText}>Ajouter un complément audio</Text>
+            </Pressable>
+            <Text style={styles.supplementHint}>
+              Le texte sera fusionné à la transcription ; chaque piste reste disponible à l’écoute avant enregistrement.
+            </Text>
 
             {/* Bouton structurer */}
             <Pressable
-              onPress={handleStructure}
-              disabled={!transcription.trim()}
+              onPress={() => void handleStructure()}
+              disabled={!transcription.trim() || isStructuring || isTranscribing}
               style={({ pressed }) => [
                 styles.structureBtn,
-                !transcription.trim() && styles.structureBtnDisabled,
+                (!transcription.trim() || isStructuring || isTranscribing) && styles.structureBtnDisabled,
                 pressed && { opacity: 0.8 },
               ]}
             >
-              <Ionicons name="sparkles" size={14} color={C.purple} />
-              <Text style={styles.structureBtnText}>Structurer le rapport</Text>
+              {isStructuring ? (
+                <ActivityIndicator size="small" color={C.purple} />
+              ) : (
+                <Ionicons name="sparkles" size={14} color={C.purple} />
+              )}
+              <Text style={styles.structureBtnText}>
+                {isStructuring ? 'Structuration…' : 'Structurer le rapport'}
+              </Text>
             </Pressable>
+
+            {structureError ? (
+              <View style={styles.transcribeErrorBox}>
+                <Ionicons name="information-circle-outline" size={14} color={C.amber} />
+                <Text style={styles.transcribeErrorText}>{structureError}</Text>
+              </View>
+            ) : null}
+
+            {structureSource ? (
+              <Text style={styles.structureSourceTag}>
+                {structureSource === 'llm'
+                  ? 'Sections et graphiques proposés par l’IA (vérifiez avant envoi).'
+                  : 'Classé localement par mots-clés (activez une clé API pour une structuration IA).'}
+              </Text>
+            ) : null}
 
             {/* Rapport structuré */}
             {structured && !structuredReportIsEmpty(structured) && (
               <View style={styles.structuredBlock}>
-                <Text style={styles.structuredTitle}>Rapport structuré</Text>
-                <StructuredSection title="Observations" items={structured.observations} color={C.cyan} />
-                <StructuredSection title="Anomalies détectées" items={structured.anomalies} color={C.red} />
-                <StructuredSection title="Données énergétiques" items={structured.consumption} color={C.green} />
-                <StructuredSection title="Actions recommandées" items={structured.actions} color={C.amber} />
+                <View style={styles.reportHeaderRow}>
+                  <Ionicons name="document-text-outline" size={14} color={C.purple} />
+                  <Text style={styles.structuredTitle}>Rapport de maintenance</Text>
+                </View>
+                {structured._sections?.objet && structured._sections.objet.length > 0 ? (
+                  <StructuredSection title="I. Objet de l'intervention" items={structured._sections.objet} color={C.blue} />
+                ) : null}
+                {structured._sections?.constats && structured._sections.constats.length > 0 ? (
+                  <StructuredSection title="II. Constatations terrain" items={structured._sections.constats} color={C.cyan} />
+                ) : null}
+                {structured.anomalies.length > 0 ? (
+                  <StructuredSection title="III. Anomalies / défauts" items={structured.anomalies} color={C.red} />
+                ) : null}
+                {structured._sections?.mesures && structured._sections.mesures.length > 0 ? (
+                  <StructuredSection title="IV. Paramètres mesurés" items={structured._sections.mesures} color={C.green} />
+                ) : null}
+                {structured._sections?.travaux && structured._sections.travaux.length > 0 ? (
+                  <StructuredSection title="V. Travaux effectués" items={structured._sections.travaux} color={C.purple} />
+                ) : null}
+                {structured._sections?.recommandations && structured._sections.recommandations.length > 0 ? (
+                  <StructuredSection title="VI. Recommandations & suivi" items={structured._sections.recommandations} color={C.amber} />
+                ) : null}
+                {structured.charts && structured.charts.length > 0 ? (
+                  <MaintenanceReportCharts charts={structured.charts} width={Math.min(winW - 48, 520)} />
+                ) : null}
               </View>
             )}
 
@@ -408,44 +680,70 @@ export function VoiceNoteBar({ equipments, onSaved }: Props) {
 }
 
 const styles = StyleSheet.create({
-  // Barre
-  bar: {
-    borderTopWidth: 1,
-    borderTopColor: C.border,
-    backgroundColor: C.surface,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    ...C.shadow,
-  },
-  barInner: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  barLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
   recDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.red },
-  barTimerText: { color: C.red, fontSize: 14, fontWeight: '700' },
-  barHint: { color: C.textMuted, fontSize: 12, flex: 1 },
-  barError: { color: C.red, fontSize: 11, marginTop: 4 },
 
-  micBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: C.blueSoft,
+  fabWrap: {
+    position: 'absolute',
+    right: 16,
+    left: 16,
+    bottom: 0,
+    alignItems: 'flex-end',
+    gap: 8,
+    zIndex: 30,
+  },
+  recPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    maxWidth: 300,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 24,
+    backgroundColor: C.surface,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    ...C.shadowMd,
+  },
+  recPillTime: { color: C.red, fontSize: 15, fontWeight: '800' },
+  recPillHint: { flex: 1, color: C.textSub, fontSize: 12, fontWeight: '600' },
+
+  fabError: {
+    alignSelf: 'flex-end',
+    maxWidth: 280,
+    color: C.red,
+    fontSize: 11,
+    lineHeight: 15,
+    textAlign: 'right',
+    backgroundColor: C.redSoft,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+
+  fabMain: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: C.blue,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: C.border,
+    elevation: 8,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
   },
-  micBtnRecording: {
-    backgroundColor: C.redSoft,
-    borderColor: '#fca5a5',
+  fabMainRecording: {
+    backgroundColor: C.surface,
+    borderWidth: 2,
+    borderColor: C.red,
   },
-
-  openBtn: {
-    backgroundColor: C.blue,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+  fabMainDraft: {
+    backgroundColor: C.surface,
+    borderWidth: 2,
+    borderColor: C.blue,
   },
-  openBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
 
   // Modal
   modalRoot: { flex: 1, backgroundColor: C.bg },
@@ -533,6 +831,31 @@ const styles = StyleSheet.create({
     minHeight: 120,
     lineHeight: 20,
   },
+  transcribingBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: C.blueSoft,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: C.border,
+    paddingHorizontal: 14,
+    paddingVertical: 18,
+    minHeight: 60,
+  },
+  transcribingText: { color: C.blue, fontSize: 14, fontWeight: '600' },
+  transcribeErrorBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: C.amberSoft,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#fde68a',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  transcribeErrorText: { color: C.amber, fontSize: 12, flex: 1, lineHeight: 18 },
 
   // Structurer
   structureBtn: {
@@ -548,6 +871,50 @@ const styles = StyleSheet.create({
   },
   structureBtnDisabled: { opacity: 0.4 },
   structureBtnText: { color: C.purple, fontWeight: '700', fontSize: 14 },
+  structureSourceTag: { color: C.textMuted, fontSize: 11, lineHeight: 16, paddingHorizontal: 2 },
+
+  supplementBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: C.purpleSoft,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#ddd6fe',
+    padding: 12,
+  },
+  supplementBannerText: { color: C.purpleText, fontSize: 13, lineHeight: 19, flex: 1 },
+
+  supplementBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: C.cyanSoft,
+    borderRadius: 10,
+    paddingVertical: 11,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  supplementBtnText: { color: C.cyan, fontWeight: '700', fontSize: 13 },
+  supplementHint: { color: C.textMuted, fontSize: 11, lineHeight: 16, marginTop: -6 },
+
+  trackScroll: { flexGrow: 0, maxWidth: 220 },
+  trackChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginRight: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: C.blueSoft,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  trackChipOn: { backgroundColor: C.blue, borderColor: C.blue },
+  trackChipTxt: { color: C.blue, fontSize: 12, fontWeight: '700' },
+  trackChipTxtOn: { color: '#fff' },
 
   // Rapport structuré
   structuredBlock: {
@@ -558,7 +925,8 @@ const styles = StyleSheet.create({
     padding: 14,
     gap: 12,
   },
-  structuredTitle: { color: C.text, fontWeight: '800', fontSize: 14, marginBottom: 2 },
+  reportHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  structuredTitle: { color: C.text, fontWeight: '800', fontSize: 14 },
   structSection: { gap: 6 },
   structLabel: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
   structItem: { flexDirection: 'row', gap: 6, alignItems: 'flex-start' },

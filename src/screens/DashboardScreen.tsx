@@ -63,7 +63,7 @@ function KpiCard({ title, value, subtitle, icon, accentColor, accentBg, unit }: 
 }
 
 // ── Alerte compacte ───────────────────────────────────────────────────────
-function AlertRow({ title, equip, sev }: { title: string; equip: string | null; sev: string }) {
+function AlertRow({ title, equip, sev }: { title: string; equip: string | null | undefined; sev: string }) {
   const dot = sev === 'critical' ? C.red : sev === 'warning' ? C.amber : C.blueMid;
   return (
     <View style={styles.alertRow}>
@@ -175,11 +175,21 @@ export function DashboardScreen() {
 
   const pfValue = pfBundle.value != null && pfBundle.value > 0 ? pfBundle.value.toFixed(3) : '--';
   const pfColor = statusColor(pfBundle.status);
-  const pfSubtitle = hasKpiForSelection ? (equipmentName ? equipmentName : 'Donnees bureau') : '--';
+  const pfSubtitle = hasKpiForSelection ? (equipmentName ? equipmentName : 'Données bureau') : '--';
 
   const harmonicsThd = kpiRecord?.harmonics && typeof kpiRecord.harmonics === 'object'
     ? (kpiRecord.harmonics as { thdTotal?: number }).thdTotal
     : undefined;
+
+  // Valeurs extra alignées avec le bureau
+  const freqHz = (kpiRecord?.frequency as { avgHz?: number } | undefined)?.avgHz ?? null;
+  const vLnAvg = (kpiRecord?.voltage as { vLnAvg?: number } | undefined)?.vLnAvg ?? null;
+  const thdCurr = kpiRecord?.thdCurrent as Record<string, unknown> | undefined;
+  const thdIAvg = thdCurr ? (typeof thdCurr.average === 'number' ? thdCurr.average : typeof thdCurr.thdTotal === 'number' ? thdCurr.thdTotal : null) : null;
+  const ecBlock = kpiRecord?.energyConsumption as Record<string, unknown> | undefined;
+  const peakKw = ecBlock ? (typeof ecBlock.peakKw === 'number' ? ecBlock.peakKw : null) : null;
+  const pbBlock = kpiRecord?.phaseBalance as Record<string, unknown> | undefined;
+  const unbalancePct = pbBlock ? (typeof pbBlock.unbalancePercent === 'number' ? pbBlock.unbalancePercent : null) : null;
 
   const lastUpdateMs = Math.max(eqUpdatedAt ?? 0, alUpdatedAt ?? 0);
   const lastUpdate = lastUpdateMs > 0
@@ -201,8 +211,8 @@ export function DashboardScreen() {
       <View style={styles.header}>
         <View style={{ flex: 1 }}>
           <Text style={styles.dateText}>{today}</Text>
-          <Text style={styles.h1}>Tableau de bord</Text>
-          <Text style={styles.h1Sub}>Qualite de l&apos;energie</Text>
+          <Text style={[styles.h1, { fontSize: layout.fontTitle }]}>Tableau de bord</Text>
+          <Text style={styles.h1Sub}>Qualité de l&apos;énergie</Text>
         </View>
         <View style={styles.headerRight}>
           <View style={styles.timePill}>
@@ -215,7 +225,7 @@ export function DashboardScreen() {
               style={({ pressed }) => [styles.equipBtn, pressed && { opacity: 0.85 }]}
             >
               <Ionicons name="hardware-chip-outline" size={13} color={C.blue} />
-              <Text style={styles.equipBtnText} numberOfLines={1}>{equipmentName ?? 'Equipement'}</Text>
+              <Text style={styles.equipBtnText} numberOfLines={1}>{equipmentName ?? 'Équipement'}</Text>
               <Text style={styles.chevron}>▼</Text>
             </Pressable>
           ) : null}
@@ -272,43 +282,92 @@ export function DashboardScreen() {
         </View>
       </View>
 
-      {/* ── THD info (si disponible) ─────────────────────────────── */}
-      {typeof harmonicsThd === 'number' && harmonicsThd >= 0 ? (
-        <View style={styles.thdCard}>
-          <View style={styles.thdLeft}>
-            <Ionicons name="analytics-outline" size={18} color={C.purple} />
-            <Text style={styles.thdLabel}>THD courant total</Text>
-          </View>
-          <Text style={styles.thdValue}>{harmonicsThd.toFixed(2)} %</Text>
+      {/* ── Métriques supplémentaires (si données bureau disponibles) ── */}
+      {hasKpiForSelection ? (
+        <View style={styles.extraMetrics}>
+          {(typeof harmonicsThd === 'number' && harmonicsThd >= 0) ? (
+            <View style={styles.metricPill}>
+              <Ionicons name="analytics-outline" size={14} color={C.purple} />
+              <Text style={styles.metricPillLabel}>THD tension</Text>
+              <Text style={[styles.metricPillValue, { color: C.purple }]}>{harmonicsThd.toFixed(2)} %</Text>
+            </View>
+          ) : null}
+          {thdIAvg != null ? (
+            <View style={styles.metricPill}>
+              <Ionicons name="pulse-outline" size={14} color={C.blue} />
+              <Text style={styles.metricPillLabel}>THD courant</Text>
+              <Text style={[styles.metricPillValue, { color: C.blue }]}>{thdIAvg.toFixed(2)} %</Text>
+            </View>
+          ) : null}
+          {peakKw != null ? (
+            <View style={styles.metricPill}>
+              <Ionicons name="thunderstorm-outline" size={14} color={C.amber} />
+              <Text style={styles.metricPillLabel}>Puissance pointe</Text>
+              <Text style={[styles.metricPillValue, { color: C.amber }]}>{peakKw.toFixed(1)} kW</Text>
+            </View>
+          ) : null}
+          {freqHz != null ? (
+            <View style={styles.metricPill}>
+              <Ionicons name="radio-outline" size={14} color={C.cyan} />
+              <Text style={styles.metricPillLabel}>Fréquence</Text>
+              <Text style={[styles.metricPillValue, { color: C.cyan }]}>{freqHz.toFixed(2)} Hz</Text>
+            </View>
+          ) : null}
+          {vLnAvg != null ? (
+            <View style={styles.metricPill}>
+              <Ionicons name="flash-outline" size={14} color={C.green} />
+              <Text style={styles.metricPillLabel}>Tension moy.</Text>
+              <Text style={[styles.metricPillValue, { color: C.green }]}>{vLnAvg.toFixed(1)} V</Text>
+            </View>
+          ) : null}
+          {unbalancePct != null ? (
+            <View style={styles.metricPill}>
+              <Ionicons name="git-branch-outline" size={14} color={unbalancePct > 5 ? C.red : unbalancePct > 2 ? C.amber : C.green} />
+              <Text style={styles.metricPillLabel}>Déséquilibre</Text>
+              <Text style={[styles.metricPillValue, { color: unbalancePct > 5 ? C.red : unbalancePct > 2 ? C.amber : C.green }]}>
+                {unbalancePct.toFixed(1)} %
+              </Text>
+            </View>
+          ) : null}
         </View>
       ) : null}
 
-      {/* ── Alertes recentes ─────────────────────────────────────── */}
+      {/* ── Alertes pour l'équipement sélectionné ───────────────── */}
       {activeAlerts.length > 0 ? (
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Alertes recentes</Text>
+            <Text style={styles.sectionTitle}>
+              {equipmentName ? `Alertes — ${equipmentName}` : 'Alertes récentes'}
+            </Text>
             <View style={[styles.countBadge, { backgroundColor: alertBg }]}>
               <Text style={[styles.countBadgeTxt, { color: alertColor }]}>{activeAlerts.length}</Text>
             </View>
           </View>
           <View style={styles.sectionCard}>
-            {activeAlerts.slice(0, 4).map((a) => (
-              <AlertRow key={a.id} title={a.title} equip={a.equipmentName} sev={a.severity} />
-            ))}
+            {activeAlerts
+              .filter((a) => !equipmentId || a.equipmentId === equipmentId || !a.equipmentId)
+              .slice(0, 4)
+              .map((a) => (
+                <AlertRow key={a.id} title={a.title} equip={a.equipmentName} sev={a.severity} />
+              ))}
+            {activeAlerts.filter((a) => !equipmentId || a.equipmentId === equipmentId || !a.equipmentId).length === 0 ? (
+              activeAlerts.slice(0, 3).map((a) => (
+                <AlertRow key={a.id} title={a.title} equip={a.equipmentName} sev={a.severity} />
+              ))
+            ) : null}
           </View>
         </View>
       ) : null}
 
-      {/* ── Equipements surveilles ────────────────────────────────── */}
+      {/* ── Équipements surveillés ────────────────────────────────── */}
       {equipments.length > 0 ? (
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Equipements surveilles</Text>
+            <Text style={styles.sectionTitle}>Équipements surveillés</Text>
             <Text style={styles.sectionCount}>{equipments.length}</Text>
           </View>
           <View style={styles.sectionCard}>
-            {equipments.slice(0, 4).map((eq: Equipment) => {
+            {equipments.slice(0, 5).map((eq: Equipment) => {
               const kRec = desktopBundle?.kpisByEquipmentId
                 ? getKpiRecordForEquipment(desktopBundle.kpisByEquipmentId, eq.id)
                 : null;
@@ -321,8 +380,8 @@ export function DashboardScreen() {
                 />
               );
             })}
-            {equipments.length > 4 ? (
-              <Text style={styles.moreEquip}>+{equipments.length - 4} autres</Text>
+            {equipments.length > 5 ? (
+              <Text style={styles.moreEquip}>+{equipments.length - 5} autres</Text>
             ) : null}
           </View>
         </View>
@@ -331,7 +390,7 @@ export function DashboardScreen() {
       {/* ── Pied de page ─────────────────────────────────────────── */}
       {loadEq ? <ActivityIndicator color={C.blue} style={{ marginTop: 8 }} /> : null}
       <Text style={styles.footer}>
-        KPI calcules sur le bureau et pousses via sync-service.
+        KPI calculés sur le bureau · synchronisation automatique toutes les 3,5 s
       </Text>
 
       {/* ── Modal choix equipement ────────────────────────────────── */}
@@ -388,13 +447,13 @@ const styles = StyleSheet.create({
   kpiCard: {
     flex: 1,
     backgroundColor: C.surface,
-    borderRadius: 14,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: C.border,
+    borderColor: '#e2e8f0',
     borderTopWidth: 3,
-    padding: 14,
-    gap: 6,
-    ...C.shadow,
+    padding: 16,
+    gap: 8,
+    ...C.shadowCard,
   },
   kpiIconWrap: { width: 32, height: 32, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginBottom: 2 },
   kpiTitle: { color: C.textSub, fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },
@@ -403,11 +462,26 @@ const styles = StyleSheet.create({
   kpiUnit: { fontSize: 12, fontWeight: '600' },
   kpiSubtitle: { color: C.textMuted, fontSize: 11, lineHeight: 15 },
 
-  // THD
-  thdCard: { backgroundColor: C.surface, borderRadius: 12, borderWidth: 1, borderColor: C.border, paddingHorizontal: 14, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', ...C.shadow },
-  thdLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  thdLabel: { color: C.textSub, fontSize: 13, fontWeight: '600' },
-  thdValue: { color: C.purple, fontSize: 18, fontWeight: '800' },
+  // Métriques extras
+  extraMetrics: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  metricPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: C.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    ...C.shadowCard,
+  },
+  metricPillLabel: { color: C.textMuted, fontSize: 11 },
+  metricPillValue: { fontSize: 13, fontWeight: '800' },
 
   // Sections
   section: { gap: 8 },
@@ -416,7 +490,14 @@ const styles = StyleSheet.create({
   sectionCount: { color: C.textMuted, fontSize: 13, fontWeight: '600' },
   countBadge: { borderRadius: 99, paddingHorizontal: 8, paddingVertical: 2 },
   countBadgeTxt: { fontSize: 11, fontWeight: '800' },
-  sectionCard: { backgroundColor: C.surface, borderRadius: 14, borderWidth: 1, borderColor: C.border, overflow: 'hidden', ...C.shadow },
+  sectionCard: {
+    backgroundColor: C.surface,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    overflow: 'hidden',
+    ...C.shadowCard,
+  },
 
   // Alerte row
   alertRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: C.borderSub },

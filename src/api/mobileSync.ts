@@ -15,6 +15,16 @@ export interface MobileEquipmentSyncDto {
   detail?: Record<string, unknown>;
 }
 
+export interface MobileAlertDto {
+  id: string;
+  title: string;
+  equipmentId: string;
+  equipmentName: string | null;
+  severity: 'warning' | 'critical' | 'info';
+  status: 'active' | 'acknowledged';
+  triggeredAt: string;
+}
+
 export interface MobileEquipmentsSnapshotResponse {
   success: boolean;
   revision: number;
@@ -22,6 +32,7 @@ export interface MobileEquipmentsSnapshotResponse {
   equipments: MobileEquipmentSyncDto[];
   kpisByEquipmentId: Record<string, unknown>;
   measurementStatsByEquipmentId: Record<string, unknown>;
+  alertsSnapshot?: MobileAlertDto[];
 }
 
 async function doFetchSnapshot(deviceToken: string): Promise<Response> {
@@ -51,6 +62,7 @@ function parseSnapshotResponse(raw: MobileEquipmentsSnapshotResponse): MobileEqu
       !Array.isArray(raw.measurementStatsByEquipmentId)
         ? raw.measurementStatsByEquipmentId
         : {},
+    alertsSnapshot: Array.isArray(raw.alertsSnapshot) ? raw.alertsSnapshot : [],
   };
 }
 

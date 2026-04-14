@@ -1,38 +1,78 @@
 /**
- * Transforme un texte transcrit en rapport structure par sections.
- * Fonctionne cote client, sans API externe.
- * Detecte les observations, anomalies, donnees de consommation et actions.
+ * Structure un texte transcrit en rapport de maintenance minier.
+ * Sections inspirées des rapports de maintenance en milieu industriel/minier :
+ *   1. Objet de l'intervention
+ *   2. Constatations terrain
+ *   3. Anomalies / défauts détectés
+ *   4. Paramètres mesurés
+ *   5. Travaux effectués
+ *   6. Recommandations & suivi
+ *
+ * Fonctionne côté client, sans API externe.
  */
 import type { StructuredReport } from '@/storage/voiceReportsRepo';
 
-// Mots-cles par categorie (francais + variations terrain)
-const OBSERVATION_KEYS = [
-  'vibration', 'bruit', 'chaleur', 'chaud', 'odeur', 'fuite', 'humidite',
-  'rouille', 'corrosion', 'echauffement', 'temperature', 'surchauffe',
-  'etincelle', 'arc', 'claquement', 'bourdonnement', 'sifflement',
-  'poussiere', 'encrassement', 'usure', 'deterioration', 'deformation',
+// ── Dictionnaires de mots-clés par section ────────────────────────────────
+
+/** Objet / nature de l'intervention */
+const OBJET_KEYS = [
+  'inspection', 'visite', 'contrôle', 'controle', 'vérification', 'verification',
+  'maintenance', 'entretien', 'révision', 'revision', 'intervention', 'dépannage', 'depannage',
+  'remplacement', 'installation', 'mise en service', 'relevé', 'releve',
+  'curative', 'préventive', 'preventive', 'corrective', 'programmée', 'programmee',
 ];
 
-const ANOMALY_KEYS = [
-  'anomalie', 'probleme', 'defaut', 'panne', 'alarme', 'alerte',
-  'dysfonctionnement', 'irregularite', 'anormal', 'critique', 'urgent',
-  'coupure', 'surcharge', 'desequilibre', 'surtension', 'sous-tension',
-  'court-circuit', 'defaillance', 'incident',
+/** Constatations terrain (physique, sensoriel, visuel) */
+const CONSTATS_KEYS = [
+  'vibration', 'vibrations', 'bruit', 'claquement', 'bourdonnement', 'sifflement',
+  'chaleur', 'chaud', 'odeur', 'fuite', 'humidité', 'humidite',
+  'rouille', 'corrosion', 'échauffement', 'echauffement', 'température', 'temperature',
+  'surchauffe', 'étincelle', 'etincelle', 'arc', 'poussière', 'poussiere',
+  'encrassement', 'usure', 'détérioration', 'deterioration', 'déformation', 'deformation',
+  'visuel', 'constaté', 'constate', 'observé', 'observe', 'noté', 'note',
+  'câble', 'cable', 'connexion', 'borne', 'contact', 'jeu de barre', 'tableau',
 ];
 
-const CONSUMPTION_KEYS = [
-  'consommation', 'energie', 'kwh', 'puissance', 'facteur', 'thd',
-  'harmonique', 'reactive', 'active', 'ampere', 'amperage', 'tension',
-  'voltage', 'watt', 'kilowatt', 'compteur', 'facture',
+/** Anomalies, défauts, alarmes, pannes */
+const ANOMALIES_KEYS = [
+  'anomalie', 'problème', 'probleme', 'défaut', 'defaut', 'panne', 'alarme', 'alerte',
+  'dysfonctionnement', 'irrégularité', 'irregularite', 'anormal', 'critique', 'urgent',
+  'coupure', 'surcharge', 'déséquilibre', 'desequilibre', 'surtension', 'sous-tension',
+  'court-circuit', 'défaillance', 'defaillance', 'incident', 'trip', 'déclenchement', 'declenchement',
+  'disjoncteur', 'fusible', 'relais', 'protections',
 ];
 
-const ACTION_KEYS = [
-  'faut', 'verifier', 'vérifier', 'remplacer', 'nettoyer', 'revision',
-  'maintenance', 'recommande', 'recommander', 'inspecter', 'changer',
-  'reparer', 'réparer', 'serrer', 'lubrifier', 'calibrer', 'tester',
-  'mesurer', 'surveiller', 'planifier', 'prevoir', 'prévoir',
-  'urgent', 'imperativement', 'impérativement',
+/** Paramètres mesurés — valeurs numériques électriques */
+const MESURES_KEYS = [
+  'consommation', 'énergie', 'energie', 'kwh', 'mwh', 'puissance', 'kw', 'kva', 'kvar',
+  'facteur de puissance', 'thd', 'harmonique', 'réactive', 'reactive', 'active', 'apparente',
+  'ampère', 'ampere', 'ampérage', 'amperage', 'tension', 'voltage', 'volt',
+  'fréquence', 'frequence', 'hz', 'watt', 'kilowatt', 'compteur',
+  'mesure', 'mesuré', 'mesure', 'valeur', 'relevé', 'releve', 'lecture',
+  'déséquilibre', 'desequilibre', 'phase', 'courant', 'courants',
 ];
+
+/** Travaux effectués pendant l'intervention */
+const TRAVAUX_KEYS = [
+  'nettoyé', 'nettoye', 'nettoyage', 'serré', 'serre', 'serrage',
+  'remplacé', 'remplace', 'remplacement', 'réparé', 'repare', 'réparation', 'reparation',
+  'calibré', 'calibre', 'calibrage', 'lubrifié', 'lubrifie', 'lubrification',
+  'installé', 'installe', 'changé', 'change', 'modifié', 'modifie',
+  'effectué', 'effectue', 'réalisé', 'realise', 'opération', 'operation',
+  'test', 'testé', 'teste', 'essai', 'mise à zéro', 'réarmé', 'rearme',
+];
+
+/** Recommandations et actions futures */
+const RECOMMANDATIONS_KEYS = [
+  'faut', 'vérifier', 'verifier', 'recommande', 'recommandation', 'recommander',
+  'inspecter', 'surveiller', 'planifier', 'prévoir', 'prevoir', 'programmer',
+  'urgent', 'impérativement', 'imperativement', 'prochaine visite', 'prochainement',
+  'suivi', 'préconise', 'preconise', 'préconisation', 'preconisation',
+  'à changer', 'a changer', 'à remplacer', 'a remplacer', 'doit être', 'doit etre',
+  'risque', 'danger', 'attention', 'avertissement',
+];
+
+// ── Helpers ───────────────────────────────────────────────────────────────
 
 function normalize(s: string): string {
   return s
@@ -48,10 +88,12 @@ function splitSentences(text: string): string[] {
     .filter((s) => s.length > 8);
 }
 
-function sentenceMatchesKeys(sentence: string, keys: string[]): boolean {
+function matchScore(sentence: string, keys: string[]): number {
   const norm = normalize(sentence);
-  return keys.some((k) => norm.includes(normalize(k)));
+  return keys.reduce((score, k) => score + (norm.includes(normalize(k)) ? 1 : 0), 0);
 }
+
+// ── Exports ───────────────────────────────────────────────────────────────
 
 export function structureTranscription(text: string): StructuredReport {
   if (!text.trim()) {
@@ -60,46 +102,68 @@ export function structureTranscription(text: string): StructuredReport {
 
   const sentences = splitSentences(text);
 
-  const observations: string[] = [];
+  const objet: string[] = [];
+  const constats: string[] = [];
   const anomalies: string[] = [];
-  const consumption: string[] = [];
-  const actions: string[] = [];
+  const mesures: string[] = [];
+  const travaux: string[] = [];
+  const recommandations: string[] = [];
+  const unclassified: string[] = [];
+
+  /** Priorité en cas d’égalité : une phrase → une seule section la plus pertinente. */
+  const sectionOrder = [objet, constats, anomalies, mesures, travaux, recommandations] as const;
+  const keySets = [OBJET_KEYS, CONSTATS_KEYS, ANOMALIES_KEYS, MESURES_KEYS, TRAVAUX_KEYS, RECOMMANDATIONS_KEYS];
 
   for (const s of sentences) {
-    const added = { obs: false, ano: false, con: false, act: false };
+    const scores = keySets.map((keys, idx) => ({ idx, sc: matchScore(s, keys) }));
+    const maxScore = Math.max(...scores.map((x) => x.sc), 0);
 
-    if (sentenceMatchesKeys(s, ACTION_KEYS)) {
-      actions.push(s);
-      added.act = true;
+    if (maxScore === 0) {
+      if (s.length > 15) unclassified.push(s);
+      continue;
     }
-    if (sentenceMatchesKeys(s, ANOMALY_KEYS)) {
-      anomalies.push(s);
-      added.ano = true;
-    }
-    if (sentenceMatchesKeys(s, CONSUMPTION_KEYS)) {
-      consumption.push(s);
-      added.con = true;
-    }
-    if (sentenceMatchesKeys(s, OBSERVATION_KEYS)) {
-      observations.push(s);
-      added.obs = true;
-    }
-    // Phrase non classee : va dans observations si elle n'a deja pas ete classee ailleurs
-    if (!added.obs && !added.ano && !added.con && !added.act && s.length > 15) {
-      observations.push(s);
-    }
+
+    const bestIdx = scores.filter((x) => x.sc === maxScore).sort((a, b) => a.idx - b.idx)[0]?.idx;
+    if (bestIdx !== undefined) sectionOrder[bestIdx].push(s);
   }
 
+  // Unclassified sentences go into constats (general observations)
+  constats.push(...unclassified);
+
+  // Map to StructuredReport shape:
+  // observations = objet + constats
+  // anomalies = anomalies
+  // consumption = mesures
+  // actions = travaux + recommandations
   return {
-    observations: [...new Set(observations)],
+    observations: [...new Set([...objet, ...constats])],
     anomalies: [...new Set(anomalies)],
-    consumption: [...new Set(consumption)],
-    actions: [...new Set(actions)],
+    consumption: [...new Set(mesures)],
+    actions: [...new Set([...travaux, ...recommandations])],
     rawText: text,
+    // Extended sections stored in rawText context for display
+    _sections: {
+      objet: [...new Set(objet)],
+      constats: [...new Set(constats)],
+      mesures: [...new Set(mesures)],
+      travaux: [...new Set(travaux)],
+      recommandations: [...new Set(recommandations)],
+    },
   };
 }
 
 export function structuredReportIsEmpty(r: StructuredReport): boolean {
+  if (r.charts && r.charts.length > 0) return false;
+  const sec = r._sections;
+  if (sec) {
+    const anySec =
+      sec.objet.length > 0 ||
+      sec.constats.length > 0 ||
+      sec.mesures.length > 0 ||
+      sec.travaux.length > 0 ||
+      sec.recommandations.length > 0;
+    if (anySec || r.anomalies.length > 0) return false;
+  }
   return (
     r.observations.length === 0 &&
     r.anomalies.length === 0 &&

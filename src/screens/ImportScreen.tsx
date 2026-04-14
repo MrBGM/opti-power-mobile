@@ -1,16 +1,22 @@
+import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, Text, View } from 'react-native';
+import { C } from '@/theme/colors';
 
 export function ImportScreen() {
   return (
     <View style={styles.wrap}>
+      <View style={styles.iconBox}>
+        <Ionicons name="cloud-upload-outline" size={40} color={C.blue} />
+      </View>
       <Text style={styles.title}>Importer données</Text>
-      <Text style={styles.caption}>Aligné sur la page Import du bureau (Excel / CA8336…).</Text>
+      <Text style={styles.caption}>Aligné sur la page Import du bureau (Excel / CA8336…) — opération réservée au desktop.</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: { flex: 1, backgroundColor: '#020617', padding: 16 },
-  title: { color: '#f8fafc', fontSize: 20, fontWeight: '800' },
-  caption: { color: '#94a3b8', marginTop: 8, fontSize: 14, lineHeight: 20 },
+  wrap: { flex: 1, backgroundColor: C.bg, padding: 24, alignItems: 'center', justifyContent: 'center', gap: 12 },
+  iconBox: { width: 72, height: 72, borderRadius: 20, backgroundColor: C.blueSoft, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
+  title: { color: C.text, fontSize: 20, fontWeight: '800' },
+  caption: { color: C.textMuted, fontSize: 14, textAlign: 'center', lineHeight: 20 },
 });
