@@ -28,7 +28,11 @@ async function applySnapshotIfNewer(
     const eqs = snap.equipments.map(dtoToEquipment);
     await replaceDesktopEquipmentsSnapshot(eqs);
     await replaceDesktopKpisAndStats(snap.kpisByEquipmentId, snap.measurementStatsByEquipmentId);
-    await replaceDesktopAlertsSnapshot(snap.alertsSnapshot ?? []);
+    // Ne remplacer les alertes que si le desktop a explicitement envoyé un snapshot
+    // (undefined = sync-service sans données → conserver les alertes locales existantes)
+    if (snap.alertsSnapshot !== undefined) {
+      await replaceDesktopAlertsSnapshot(snap.alertsSnapshot);
+    }
     usePairingStore.getState().setLastEquipmentsRevision(snap.revision);
     await queryClient.invalidateQueries({ queryKey: ['local', 'equipments'] });
     await queryClient.invalidateQueries({ queryKey: ['local', 'desktop-kpi-bundle'] });

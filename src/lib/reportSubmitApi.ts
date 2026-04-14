@@ -25,8 +25,11 @@ interface ReviewStatus {
   reviewedBy:  string | null;
 }
 
-function withTimeout(ms: number): AbortSignal {
-  return AbortSignal.timeout(ms);
+/** AbortSignal.timeout() n'existe pas dans Hermes (React Native) — polyfill via AbortController. */
+function withTimeout(ms: number): { signal: AbortSignal; clear: () => void } {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), ms);
+  return { signal: ctrl.signal, clear: () => clearTimeout(id) };
 }
 
 /**
@@ -38,6 +41,7 @@ export async function submitReportToSupervisor(
   report:       VoiceReport,
   technician:   { name: string; email: string; userId: string },
 ): Promise<SubmitResult> {
+  const { signal, clear } = withTimeout(TIMEOUT_MS);
   try {
     const url = `${syncEndpoint.replace(/\/$/, '')}/v1/reports`;
     const resp = await fetch(url, {
@@ -56,7 +60,7 @@ export async function submitReportToSupervisor(
         structuredJson:   report.structuredJson,
         durationMs:       report.durationMs,
       }),
-      signal: withTimeout(TIMEOUT_MS),
+      signal,
     });
 
     const json = (await resp.json().catch(() => ({}))) as {
@@ -70,8 +74,10 @@ export async function submitReportToSupervisor(
       return { success: false, error: json.error ?? `HTTP ${resp.status}` };
     }
 
+    clear();
     return { success: true, cloudReportId: json.reportId, duplicate: json.duplicate };
   } catch (e) {
+    clear();
     return { success: false, error: (e as Error).message };
   }
 }
@@ -83,16 +89,19 @@ export async function fetchMyReportStatuses(
   syncEndpoint: string,
   deviceToken:  string,
 ): Promise<ReviewStatus[]> {
+  const { signal, clear } = withTimeout(TIMEOUT_MS);
   try {
     const url = `${syncEndpoint.replace(/\/$/, '')}/v1/reports`;
     const resp = await fetch(url, {
       headers: { Authorization: `Bearer ${deviceToken}` },
-      signal:  withTimeout(TIMEOUT_MS),
+      signal,
     });
+    clear();
     if (!resp.ok) return [];
     const json = (await resp.json().catch(() => ({}))) as { reports?: ReviewStatus[] };
     return json.reports ?? [];
   } catch {
+    clear();
     return [];
   }
 }

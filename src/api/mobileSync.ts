@@ -62,7 +62,8 @@ function parseSnapshotResponse(raw: MobileEquipmentsSnapshotResponse): MobileEqu
       !Array.isArray(raw.measurementStatsByEquipmentId)
         ? raw.measurementStatsByEquipmentId
         : {},
-    alertsSnapshot: Array.isArray(raw.alertsSnapshot) ? raw.alertsSnapshot : [],
+    // undefined = serveur n'a pas encore de snapshot → ne pas toucher aux alertes locales
+    alertsSnapshot: Array.isArray(raw.alertsSnapshot) ? raw.alertsSnapshot : undefined,
   };
 }
 

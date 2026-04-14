@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import {
   ActivityIndicator,
@@ -103,29 +104,61 @@ export function ReportsScreen() {
     queryFn:  () => listVoiceReports(),
   });
 
-  // Vérifier les statuts de revue au chargement (si appairé)
-  const hasFetchedStatuses = useRef(false);
-  useEffect(() => {
-    if (!cloudLinked || !deviceToken || !syncEndpoint || hasFetchedStatuses.current) return;
-    hasFetchedStatuses.current = true;
-    (async () => {
-      try {
-        const statuses = await fetchMyReportStatuses(syncEndpoint, deviceToken);
-        for (const s of statuses) {
-          if (s.localReportId && (s.status === 'accepted' || s.status === 'rejected')) {
-            await updateVoiceReportSubmission(s.localReportId, {
-              reviewStatus: s.status,
-              reviewNote:   s.reviewNote,
-            });
-          }
+  // Polling des statuts de revue — tourne quand l'écran est visible, toutes les 30 s
+  const isPollingRef = useRef(false);
+  const checkReviewStatuses = useCallback(async (showAlert = false) => {
+    if (!cloudLinked || !deviceToken || !syncEndpoint || isPollingRef.current) return;
+    isPollingRef.current = true;
+    try {
+      const statuses = await fetchMyReportStatuses(syncEndpoint, deviceToken);
+      const currentReports = await listVoiceReports();
+      const changed: { name: string; status: 'accepted' | 'rejected'; note: string | null }[] = [];
+
+      for (const s of statuses) {
+        if (!s.localReportId) continue;
+        const local = currentReports.find((r) => r.id === s.localReportId);
+        // Détecter un changement de statut (pending → accepted/rejected)
+        if ((s.status === 'accepted' || s.status === 'rejected') && local && local.reviewStatus !== s.status) {
+          await updateVoiceReportSubmission(s.localReportId, {
+            reviewStatus: s.status,
+            reviewNote:   s.reviewNote,
+          });
+          changed.push({
+            name:   local.equipmentName ?? 'Note vocale',
+            status: s.status,
+            note:   s.reviewNote,
+          });
         }
-        // Rafraîchir si des statuts ont changé
-        if (statuses.some((s) => s.status !== 'pending')) {
-          void refetchVoice();
+      }
+
+      if (changed.length > 0) {
+        void refetchVoice();
+        // Notification pour chaque rapport dont le statut a changé
+        for (const c of changed) {
+          const titre  = c.status === 'accepted' ? '✅ Rapport approuvé' : '❌ Rapport refusé';
+          const detail = c.status === 'rejected' && c.note
+            ? `Motif : ${c.note}`
+            : c.status === 'accepted'
+              ? 'Le superviseur a validé votre rapport.'
+              : 'Le superviseur a refusé votre rapport.';
+          Alert.alert(titre, `${c.name}\n\n${detail}`);
         }
-      } catch { /* non bloquant */ }
-    })();
+      } else if (showAlert) {
+        void refetchVoice();
+      }
+    } catch { /* non bloquant */ }
+    finally { isPollingRef.current = false; }
   }, [cloudLinked, deviceToken, syncEndpoint, refetchVoice]);
+
+  // Poll immédiat + toutes les 30 s quand l'écran est au premier plan
+  useFocusEffect(
+    useCallback(() => {
+      if (!cloudLinked) return;
+      void checkReviewStatuses(true);
+      const id = setInterval(() => void checkReviewStatuses(false), 30_000);
+      return () => clearInterval(id);
+    }, [cloudLinked, checkReviewStatuses]),
+  );
 
   const handleSubmitReport = useCallback(async (vr: VoiceReport) => {
     if (!cloudLinked || !deviceToken || !syncEndpoint) {
