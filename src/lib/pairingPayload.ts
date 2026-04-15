@@ -9,24 +9,33 @@ function stripBom(s: string): string {
 }
 
 /**
- * Récupère la chaîne utile depuis le callback expo-camera (formats d'événement variables selon plateforme / version).
+ * Récupère la chaîne utile depuis le callback expo-camera v17.
+ *
+ * expo-camera v17 (Expo SDK 54) : _onObjectDetected extrait nativeEvent en interne et
+ * appelle notre callback avec directement un BarcodeScanningResult :
+ *   { type: string, data: string, raw?: string, cornerPoints: [...], bounds: {...} }
+ *
+ * On conserve les fallbacks legacy (nativeEvent, raw) pour compatibilité.
  */
 export function barcodeScanResultToString(result: unknown): string {
   if (result == null) return '';
   if (typeof result === 'string') return result.trim();
   if (typeof result !== 'object') return '';
   const o = result as Record<string, unknown>;
-  if (o.nativeEvent && typeof o.nativeEvent === 'object') {
-    const ne = o.nativeEvent as Record<string, unknown>;
-    const d = ne.data;
-    const r = ne.raw;
-    if (typeof d === 'string' && d.length > 0) return d;
-    if (typeof r === 'string' && r.length > 0) return r;
+  // expo-camera v17 : data est directement sur l'objet
+  const d = o['data'];
+  if (typeof d === 'string' && d.length > 0) return d.trim();
+  // Fallback raw (Android)
+  const r = o['raw'];
+  if (typeof r === 'string' && r.length > 0) return r.trim();
+  // Legacy : nativeEvent wrapper (versions antérieures)
+  if (o['nativeEvent'] && typeof o['nativeEvent'] === 'object') {
+    const ne = o['nativeEvent'] as Record<string, unknown>;
+    const nd = ne['data'];
+    const nr = ne['raw'];
+    if (typeof nd === 'string' && nd.length > 0) return nd.trim();
+    if (typeof nr === 'string' && nr.length > 0) return nr.trim();
   }
-  const d = o.data;
-  const r = o.raw;
-  if (typeof d === 'string' && d.length > 0) return d;
-  if (typeof r === 'string' && r.length > 0) return r;
   return '';
 }
 

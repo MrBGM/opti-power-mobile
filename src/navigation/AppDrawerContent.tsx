@@ -32,6 +32,7 @@ type Item = {
 const ITEMS: Item[] = [
   { name: 'Dashboard',  label: 'Tableau de bord', icon: 'home-outline' },
   { name: 'Equipments', label: 'Équipements',      icon: 'flash-outline' },
+  { name: 'Realtime',   label: 'Temps réel',       icon: 'radio-outline', minRole: 'operator' },
   { name: 'Analytics',  label: 'Analyses',          icon: 'bar-chart-outline' },
   { name: 'Alerts',     label: 'Alertes',            icon: 'warning-outline' },
   { name: 'Reports',    label: 'Rapports',           icon: 'document-text-outline' },

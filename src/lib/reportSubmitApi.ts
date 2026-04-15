@@ -32,14 +32,18 @@ function withTimeout(ms: number): { signal: AbortSignal; clear: () => void } {
   return { signal: ctrl.signal, clear: () => clearTimeout(id) };
 }
 
+export type ExportFormat = 'pdf' | 'word' | 'md' | 'excel';
+
 /**
  * Soumet un rapport vocal au sync-service pour revue par le superviseur.
+ * @param exportFormat Format dans lequel le superviseur recevra le rapport (pdf|word|md|excel)
  */
 export async function submitReportToSupervisor(
   syncEndpoint: string,
   deviceToken:  string,
   report:       VoiceReport,
   technician:   { name: string; email: string; userId: string },
+  exportFormat: ExportFormat = 'pdf',
 ): Promise<SubmitResult> {
   const { signal, clear } = withTimeout(TIMEOUT_MS);
   try {
@@ -59,6 +63,7 @@ export async function submitReportToSupervisor(
         transcription:    report.transcription,
         structuredJson:   report.structuredJson,
         durationMs:       report.durationMs,
+        exportFormat,
       }),
       signal,
     });

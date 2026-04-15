@@ -71,7 +71,9 @@ export async function updateAlertStatus(id: string, status: AlertStatus): Promis
 export async function replaceDesktopAlertsSnapshot(alerts: MobileAlertDto[]): Promise<void> {
   const db = await getDb();
   const now = new Date().toISOString();
+
   if (alerts.length === 0) {
+    // Snapshot vide explicite = desktop n'a plus d'alertes actives
     await db.runAsync(
       `UPDATE alerts SET status = 'resolved', updated_at = ?
        WHERE status IN ('active', 'acknowledged')`,
@@ -79,23 +81,26 @@ export async function replaceDesktopAlertsSnapshot(alerts: MobileAlertDto[]): Pr
     );
     return;
   }
-  // Upsert each alert from the snapshot
+
+  // Le desktop est source de vérité : son statut écrase toujours le statut local.
+  // Cela restaure les alertes résolues par erreur (snapshot vide) dès que le desktop
+  // renvoie un snapshot valide avec des alertes actives.
   for (const a of alerts) {
     await db.runAsync(
       `INSERT INTO alerts (id, title, equipment_id, equipment_name, severity, status, triggered_at, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
-         title=excluded.title,
-         equipment_id=excluded.equipment_id,
-         equipment_name=excluded.equipment_name,
-         severity=excluded.severity,
-         status=CASE WHEN alerts.status = 'resolved' THEN 'resolved' ELSE excluded.status END,
-         triggered_at=excluded.triggered_at,
-         updated_at=excluded.updated_at`,
+         title         = excluded.title,
+         equipment_id  = excluded.equipment_id,
+         equipment_name= excluded.equipment_name,
+         severity      = excluded.severity,
+         status        = excluded.status,
+         triggered_at  = excluded.triggered_at,
+         updated_at    = excluded.updated_at`,
       [
         a.id,
         a.title,
-        a.equipmentId,
+        a.equipmentId ?? null,
         a.equipmentName ?? null,
         a.severity,
         a.status,
@@ -105,17 +110,15 @@ export async function replaceDesktopAlertsSnapshot(alerts: MobileAlertDto[]): Pr
       ]
     );
   }
-  // Remove alerts not in the snapshot that are still active/acknowledged
-  // (they were resolved on the desktop)
-  if (alerts.length > 0) {
-    const ids = alerts.map(() => '?').join(', ');
-    await db.runAsync(
-      `UPDATE alerts SET status = 'resolved', updated_at = ?
-       WHERE status IN ('active', 'acknowledged')
-       AND id NOT IN (${ids})`,
-      [now, ...alerts.map((a) => a.id)]
-    );
-  }
+
+  // Alertes absentes du snapshot desktop → résolues côté bureau
+  const ids = alerts.map(() => '?').join(', ');
+  await db.runAsync(
+    `UPDATE alerts SET status = 'resolved', updated_at = ?
+     WHERE status IN ('active', 'acknowledged')
+     AND id NOT IN (${ids})`,
+    [now, ...alerts.map((a) => a.id)]
+  );
 }
 
 export async function upsertAlert(a: AlertProjection): Promise<void> {

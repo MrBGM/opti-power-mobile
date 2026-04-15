@@ -15,6 +15,7 @@ export type DrawerParamList = {
   Analytics:  undefined;
   Alerts:     undefined;
   Reports:    undefined;
+  Realtime:   undefined;
   Profile:    undefined;
   Settings:   undefined;
   Admin:      undefined;

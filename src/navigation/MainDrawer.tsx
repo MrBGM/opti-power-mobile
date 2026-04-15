@@ -11,6 +11,7 @@ import { DashboardScreen } from '@/screens/DashboardScreen';
 import { EquipmentsStack } from '@/navigation/EquipmentsStack';
 import { PairingScreen } from '@/screens/PairingScreen';
 import { ReportsScreen } from '@/screens/ReportsScreen';
+import { RealtimeScreen } from '@/screens/RealtimeScreen';
 import { ProfileScreen } from '@/screens/ProfileScreen';
 import { SettingsScreen } from '@/screens/SettingsScreen';
 
@@ -53,7 +54,8 @@ export function MainDrawer() {
       <Drawer.Screen name="Equipments" component={EquipmentsStack} options={{ title: 'Équipements' }} />
       <Drawer.Screen name="Analytics" component={AnalyticsGate} options={{ title: 'Analyses' }} />
       <Drawer.Screen name="Alerts" component={AlertsScreen} options={{ title: 'Alertes' }} />
-      <Drawer.Screen name="Reports" component={ReportsScreen} options={{ title: 'Rapports' }} />
+      <Drawer.Screen name="Reports"   component={ReportsScreen}  options={{ title: 'Rapports' }} />
+      <Drawer.Screen name="Realtime"  component={RealtimeScreen} options={{ title: 'Temps réel' }} />
       <Drawer.Screen name="Profile" component={ProfileScreen} options={{ title: 'Mon profil' }} />
       <Drawer.Screen name="Admin" component={AdminGate} options={{ title: 'Administration' }} />
       <Drawer.Screen name="Settings" component={SettingsScreen} options={{ title: 'Paramètres' }} />
