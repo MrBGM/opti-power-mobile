@@ -39,7 +39,7 @@ import { fmtDuration } from '@/lib/reportStructurer';
 import { getKpiRecordFromBundle, getStatsRawFromBundle } from '@/lib/syncBundleLookup';
 import { useAuthStore } from '@/store/authStore';
 import { usePairingStore } from '@/store/pairingStore';
-import { listVoiceReports, deleteVoiceReport, updateVoiceReportSubmission, resetReportForResubmit } from '@/storage/voiceReportsRepo';
+import { listVoiceReports, saveVoiceReport, deleteVoiceReport, updateVoiceReportSubmission, resetReportForResubmit } from '@/storage/voiceReportsRepo';
 import type { VoiceReport } from '@/storage/voiceReportsRepo';
 import { C, statusColor } from '@/theme/colors';
 
@@ -105,6 +105,7 @@ export function ReportsScreen() {
   const [formatById, setFormatById]           = useState<Record<string, ExportFormat>>({});
   const [editingReport, setEditingReport]     = useState<VoiceReport | null>(null);
   const [editText, setEditText]               = useState('');
+  const [editMode, setEditMode]               = useState<'draft' | 'resubmit'>('draft');
   const [resubmittingId, setResubmittingId]   = useState<string | null>(null);
 
   const {
@@ -128,7 +129,10 @@ export function ReportsScreen() {
       for (const s of statuses) {
         if (!s.localReportId) continue;
         const local = currentReports.find((r) => r.id === s.localReportId);
-        if ((s.status === 'accepted' || s.status === 'rejected') && local && local.reviewStatus !== s.status) {
+        if (!local) continue;
+        const terminalStatus = s.status === 'accepted' || s.status === 'rejected';
+        if (terminalStatus && local.reviewStatus !== s.status) {
+          // Statut changé → on met à jour localement et on notifie
           await updateVoiceReportSubmission(s.localReportId, {
             reviewStatus: s.status,
             reviewNote:   s.reviewNote,
@@ -197,32 +201,44 @@ export function ReportsScreen() {
     }
   }, [cloudLinked, deviceToken, syncEndpoint, submittingId, technicianInfo, refetchVoice]);
 
-  const handleResubmit = useCallback(async () => {
+  const handleSaveEdit = useCallback(async () => {
     if (!editingReport) return;
     const vr = editingReport;
-    if (!vr.cloudReportId) {
-      Alert.alert('Erreur', 'Identifiant cloud manquant. Impossible de resoumettre.');
-      return;
-    }
-    if (!cloudLinked || !deviceToken || !syncEndpoint) {
-      Alert.alert('Non appairé', 'Appairez l\'application avec le bureau avant de resoumettre.');
-      return;
-    }
     setResubmittingId(vr.id);
     try {
-      const result = await resubmitReport(syncEndpoint, deviceToken, vr.cloudReportId, editText, vr.structuredJson);
-      if (result.success) {
-        await resetReportForResubmit(vr.id, editText);
+      if (editMode === 'draft') {
+        // Modification locale avant soumission — pas d'appel réseau
+        await saveVoiceReport({
+          ...vr,
+          transcription: editText,
+          updatedAt:     new Date().toISOString(),
+        });
         await refetchVoice();
         setEditingReport(null);
-        Alert.alert('Rapport resoumis ✓', 'Le superviseur a été notifié pour une nouvelle revue.');
       } else {
-        Alert.alert('Erreur', result.error ?? 'Impossible de resoumettre le rapport.');
+        // Resoumission après refus — appel réseau
+        if (!vr.cloudReportId) {
+          Alert.alert('Erreur', 'Identifiant cloud manquant. Impossible de resoumettre.');
+          return;
+        }
+        if (!cloudLinked || !deviceToken || !syncEndpoint) {
+          Alert.alert('Non appairé', 'Appairez l\'application avant de resoumettre.');
+          return;
+        }
+        const result = await resubmitReport(syncEndpoint, deviceToken, vr.cloudReportId, editText, vr.structuredJson);
+        if (result.success) {
+          await resetReportForResubmit(vr.id, editText);
+          await refetchVoice();
+          setEditingReport(null);
+          Alert.alert('Rapport resoumis ✓', 'Le superviseur a été notifié pour une nouvelle revue.');
+        } else {
+          Alert.alert('Erreur', result.error ?? 'Impossible de resoumettre le rapport.');
+        }
       }
     } finally {
       setResubmittingId(null);
     }
-  }, [editingReport, editText, cloudLinked, deviceToken, syncEndpoint, refetchVoice]);
+  }, [editingReport, editText, editMode, cloudLinked, deviceToken, syncEndpoint, refetchVoice]);
 
   const reports: EquipReport[] = equipments
     .filter((e) => e.syncedFromDesktop)
@@ -544,7 +560,7 @@ export function ReportsScreen() {
                             </Text>
                             <TouchableOpacity
                               style={styles.resubmitBtn}
-                              onPress={() => { setEditingReport(vr); setEditText(vr.transcription); }}
+                              onPress={() => { setEditMode('resubmit'); setEditingReport(vr); setEditText(vr.transcription); }}
                             >
                               <Ionicons name="create-outline" size={13} color="#fff" />
                               <Text style={styles.resubmitBtnText}>Modifier et resoumettre</Text>
@@ -583,25 +599,36 @@ export function ReportsScreen() {
 
                       <View style={styles.actionRow}>
                         {!vr.submittedAt ? (
-                          <TouchableOpacity
-                            onPress={() => void handleSubmitReport(vr)}
-                            disabled={submittingId === vr.id || !cloudLinked || vr.status !== 'saved'}
-                            style={[
-                              styles.submitBtn,
-                              (!cloudLinked || vr.status !== 'saved' || submittingId === vr.id) && styles.submitBtnDisabled,
-                            ]}
-                          >
-                            <Ionicons name="send-outline" size={13} color="#fff" />
-                            <Text style={styles.submitBtnText}>
-                              {submittingId === vr.id
-                                ? 'Envoi…'
-                                : vr.status !== 'saved'
-                                  ? 'Finalisez d\'abord le rapport'
-                                  : !cloudLinked
-                                    ? 'Appairage requis'
-                                    : `Envoyer (${(formatById[vr.id] ?? 'pdf').toUpperCase()})`}
-                            </Text>
-                          </TouchableOpacity>
+                          <View style={{ flexDirection: 'row', gap: 8, flex: 1, flexWrap: 'wrap' }}>
+                            {/* Bouton modifier (brouillon) */}
+                            <TouchableOpacity
+                              onPress={() => { setEditMode('draft'); setEditingReport(vr); setEditText(vr.transcription); }}
+                              style={styles.editDraftBtn}
+                            >
+                              <Ionicons name="create-outline" size={13} color={C.blue} />
+                              <Text style={styles.editDraftBtnText}>Modifier</Text>
+                            </TouchableOpacity>
+                            {/* Bouton envoyer */}
+                            <TouchableOpacity
+                              onPress={() => void handleSubmitReport(vr)}
+                              disabled={submittingId === vr.id || !cloudLinked || vr.status !== 'saved'}
+                              style={[
+                                styles.submitBtn,
+                                (!cloudLinked || vr.status !== 'saved' || submittingId === vr.id) && styles.submitBtnDisabled,
+                              ]}
+                            >
+                              <Ionicons name="send-outline" size={13} color="#fff" />
+                              <Text style={styles.submitBtnText}>
+                                {submittingId === vr.id
+                                  ? 'Envoi…'
+                                  : vr.status !== 'saved'
+                                    ? 'Finalisez d\'abord'
+                                    : !cloudLinked
+                                      ? 'Appairage requis'
+                                      : `Envoyer (${(formatById[vr.id] ?? 'pdf').toUpperCase()})`}
+                              </Text>
+                            </TouchableOpacity>
+                          </View>
                         ) : (
                           <View style={styles.submittedInfo}>
                             <Ionicons name="cloud-done-outline" size={13} color={C.textMuted} />
@@ -748,7 +775,7 @@ export function ReportsScreen() {
         </ScrollView>
       )}
 
-      {/* ── Modal : modification et resoumission d'un rapport refusé ── */}
+      {/* ── Modal : modification (brouillon ou resoumission après refus) ── */}
       <Modal
         visible={editingReport !== null}
         animationType="slide"
@@ -762,7 +789,9 @@ export function ReportsScreen() {
           {/* En-tête du modal */}
           <View style={styles.modalHeader}>
             <View style={{ flex: 1, gap: 2 }}>
-              <Text style={styles.modalTitle}>Modifier le rapport</Text>
+              <Text style={styles.modalTitle}>
+                {editMode === 'resubmit' ? 'Modifier et resoumettre' : 'Modifier le rapport'}
+              </Text>
               <Text style={styles.modalSub} numberOfLines={1}>
                 {editingReport?.equipmentName ?? 'Note générale'}
               </Text>
@@ -776,12 +805,12 @@ export function ReportsScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* Motif de refus (rappel) */}
-          {editingReport?.reviewNote ? (
+          {/* Motif de refus (rappel — mode resoumission uniquement) */}
+          {editMode === 'resubmit' && editingReport?.reviewNote ? (
             <View style={styles.modalRefusalBox}>
               <Ionicons name="alert-circle-outline" size={14} color={C.red} />
               <Text style={styles.modalRefusalText}>
-                <Text style={{ fontWeight: '700' }}>Motif : </Text>
+                <Text style={{ fontWeight: '700' }}>Motif du superviseur : </Text>
                 {editingReport.reviewNote}
               </Text>
             </View>
@@ -816,16 +845,18 @@ export function ReportsScreen() {
                 styles.modalSubmitBtn,
                 (!editText.trim() || !!resubmittingId) && styles.modalSubmitBtnDisabled,
               ]}
-              onPress={() => void handleResubmit()}
+              onPress={() => void handleSaveEdit()}
               disabled={!editText.trim() || !!resubmittingId}
             >
               {resubmittingId ? (
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
-                <Ionicons name="send-outline" size={14} color="#fff" />
+                <Ionicons name={editMode === 'resubmit' ? 'send-outline' : 'checkmark-outline'} size={14} color="#fff" />
               )}
               <Text style={styles.modalSubmitTxt}>
-                {resubmittingId ? 'Envoi…' : 'Resoumettre'}
+                {resubmittingId
+                  ? (editMode === 'resubmit' ? 'Envoi…' : 'Sauvegarde…')
+                  : (editMode === 'resubmit' ? 'Resoumettre' : 'Sauvegarder')}
               </Text>
             </TouchableOpacity>
           </View>
@@ -1143,6 +1174,20 @@ const styles = StyleSheet.create({
   emptyWrap:  { alignItems: 'center', marginTop: 60, gap: 12, paddingHorizontal: 24 },
   emptyTitle: { color: C.text, fontSize: 16, fontWeight: '700', textAlign: 'center' },
   emptyBody:  { color: C.textMuted, fontSize: 14, textAlign: 'center', lineHeight: 20 },
+
+  // Bouton "Modifier" (brouillon non soumis)
+  editDraftBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderWidth: 1,
+    borderColor: C.blue,
+    backgroundColor: C.blueSoft,
+  },
+  editDraftBtnText: { color: C.blue, fontSize: 13, fontWeight: '700' },
 
   // Bouton "Modifier et resoumettre" dans la note de refus
   resubmitBtn: {
