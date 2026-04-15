@@ -104,6 +104,32 @@ export async function deleteVoiceReport(id: string): Promise<void> {
   await db.runAsync(`DELETE FROM voice_reports WHERE id = ?`, id);
 }
 
+/** Remet un rapport refusé en état "prêt à resoumettre" avec le nouveau contenu */
+export async function resetReportForResubmit(
+  id: string,
+  newTranscription: string,
+  newStructuredJson?: unknown,
+): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `UPDATE voice_reports
+     SET transcription  = ?,
+         structured_json = COALESCE(?, structured_json),
+         review_status   = 'pending',
+         review_note     = NULL,
+         submitted_at    = ?,
+         updated_at      = ?
+     WHERE id = ?`,
+    [
+      newTranscription,
+      newStructuredJson ? JSON.stringify(newStructuredJson) : null,
+      new Date().toISOString(),
+      new Date().toISOString(),
+      id,
+    ],
+  );
+}
+
 /** Met à jour les champs de soumission/revue sans toucher au reste */
 export async function updateVoiceReportSubmission(
   id: string,

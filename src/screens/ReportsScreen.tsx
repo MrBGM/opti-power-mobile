@@ -5,11 +5,15 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   useWindowDimensions,
   View,
@@ -30,12 +34,12 @@ import {
   kpiEmptyReason,
   kpiRecordHasDisplayableData,
 } from '@/lib/desktopKpiDisplay';
-import { submitReportToSupervisor, fetchMyReportStatuses, type ExportFormat } from '@/lib/reportSubmitApi';
+import { submitReportToSupervisor, resubmitReport, fetchMyReportStatuses, type ExportFormat } from '@/lib/reportSubmitApi';
 import { fmtDuration } from '@/lib/reportStructurer';
 import { getKpiRecordFromBundle, getStatsRawFromBundle } from '@/lib/syncBundleLookup';
 import { useAuthStore } from '@/store/authStore';
 import { usePairingStore } from '@/store/pairingStore';
-import { listVoiceReports, deleteVoiceReport, updateVoiceReportSubmission } from '@/storage/voiceReportsRepo';
+import { listVoiceReports, deleteVoiceReport, updateVoiceReportSubmission, resetReportForResubmit } from '@/storage/voiceReportsRepo';
 import type { VoiceReport } from '@/storage/voiceReportsRepo';
 import { C, statusColor } from '@/theme/colors';
 
@@ -99,6 +103,9 @@ export function ReportsScreen() {
   const [voiceExpanded, setVoiceExpanded]     = useState<string | null>(null);
   const [submittingId, setSubmittingId]       = useState<string | null>(null);
   const [formatById, setFormatById]           = useState<Record<string, ExportFormat>>({});
+  const [editingReport, setEditingReport]     = useState<VoiceReport | null>(null);
+  const [editText, setEditText]               = useState('');
+  const [resubmittingId, setResubmittingId]   = useState<string | null>(null);
 
   const {
     data: voiceReports = [],
@@ -189,6 +196,33 @@ export function ReportsScreen() {
       setSubmittingId(null);
     }
   }, [cloudLinked, deviceToken, syncEndpoint, submittingId, technicianInfo, refetchVoice]);
+
+  const handleResubmit = useCallback(async () => {
+    if (!editingReport) return;
+    const vr = editingReport;
+    if (!vr.cloudReportId) {
+      Alert.alert('Erreur', 'Identifiant cloud manquant. Impossible de resoumettre.');
+      return;
+    }
+    if (!cloudLinked || !deviceToken || !syncEndpoint) {
+      Alert.alert('Non appairé', 'Appairez l\'application avec le bureau avant de resoumettre.');
+      return;
+    }
+    setResubmittingId(vr.id);
+    try {
+      const result = await resubmitReport(syncEndpoint, deviceToken, vr.cloudReportId, editText, vr.structuredJson);
+      if (result.success) {
+        await resetReportForResubmit(vr.id, editText);
+        await refetchVoice();
+        setEditingReport(null);
+        Alert.alert('Rapport resoumis ✓', 'Le superviseur a été notifié pour une nouvelle revue.');
+      } else {
+        Alert.alert('Erreur', result.error ?? 'Impossible de resoumettre le rapport.');
+      }
+    } finally {
+      setResubmittingId(null);
+    }
+  }, [editingReport, editText, cloudLinked, deviceToken, syncEndpoint, refetchVoice]);
 
   const reports: EquipReport[] = equipments
     .filter((e) => e.syncedFromDesktop)
@@ -500,13 +534,22 @@ export function ReportsScreen() {
                         </View>
                       )}
 
-                      {vr.reviewStatus === 'rejected' && vr.reviewNote ? (
+                      {vr.reviewStatus === 'rejected' ? (
                         <View style={styles.reviewNoteBox}>
                           <Ionicons name="alert-circle-outline" size={14} color={C.red} />
-                          <Text style={styles.reviewNoteText}>
-                            <Text style={{ fontWeight: '700' }}>Motif de refus : </Text>
-                            {vr.reviewNote}
-                          </Text>
+                          <View style={{ flex: 1, gap: 8 }}>
+                            <Text style={styles.reviewNoteText}>
+                              <Text style={{ fontWeight: '700' }}>Motif de refus : </Text>
+                              {vr.reviewNote ?? 'Aucun motif fourni.'}
+                            </Text>
+                            <TouchableOpacity
+                              style={styles.resubmitBtn}
+                              onPress={() => { setEditingReport(vr); setEditText(vr.transcription); }}
+                            >
+                              <Ionicons name="create-outline" size={13} color="#fff" />
+                              <Text style={styles.resubmitBtnText}>Modifier et resoumettre</Text>
+                            </TouchableOpacity>
+                          </View>
                         </View>
                       ) : vr.reviewStatus === 'accepted' ? (
                         <View style={[styles.reviewNoteBox, { backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }]}>
@@ -704,6 +747,90 @@ export function ReportsScreen() {
           })}
         </ScrollView>
       )}
+
+      {/* ── Modal : modification et resoumission d'un rapport refusé ── */}
+      <Modal
+        visible={editingReport !== null}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => !resubmittingId && setEditingReport(null)}
+      >
+        <KeyboardAvoidingView
+          style={styles.modalRoot}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          {/* En-tête du modal */}
+          <View style={styles.modalHeader}>
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text style={styles.modalTitle}>Modifier le rapport</Text>
+              <Text style={styles.modalSub} numberOfLines={1}>
+                {editingReport?.equipmentName ?? 'Note générale'}
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => setEditingReport(null)}
+              disabled={!!resubmittingId}
+              style={styles.modalCloseBtn}
+            >
+              <Ionicons name="close" size={20} color={C.textSub} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Motif de refus (rappel) */}
+          {editingReport?.reviewNote ? (
+            <View style={styles.modalRefusalBox}>
+              <Ionicons name="alert-circle-outline" size={14} color={C.red} />
+              <Text style={styles.modalRefusalText}>
+                <Text style={{ fontWeight: '700' }}>Motif : </Text>
+                {editingReport.reviewNote}
+              </Text>
+            </View>
+          ) : null}
+
+          {/* Zone de texte */}
+          <Text style={styles.modalInputLabel}>Transcription / Compte-rendu</Text>
+          <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
+            <TextInput
+              style={styles.modalTextInput}
+              multiline
+              value={editText}
+              onChangeText={setEditText}
+              placeholder="Modifiez votre rapport ici…"
+              placeholderTextColor={C.textMuted}
+              autoFocus
+              scrollEnabled={false}
+            />
+          </ScrollView>
+
+          {/* Actions */}
+          <View style={styles.modalFooter}>
+            <TouchableOpacity
+              style={styles.modalCancelBtn}
+              onPress={() => setEditingReport(null)}
+              disabled={!!resubmittingId}
+            >
+              <Text style={styles.modalCancelTxt}>Annuler</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.modalSubmitBtn,
+                (!editText.trim() || !!resubmittingId) && styles.modalSubmitBtnDisabled,
+              ]}
+              onPress={() => void handleResubmit()}
+              disabled={!editText.trim() || !!resubmittingId}
+            >
+              {resubmittingId ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Ionicons name="send-outline" size={14} color="#fff" />
+              )}
+              <Text style={styles.modalSubmitTxt}>
+                {resubmittingId ? 'Envoi…' : 'Resoumettre'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
       <VoiceNoteBar
         equipments={equipmentList}
@@ -1016,4 +1143,116 @@ const styles = StyleSheet.create({
   emptyWrap:  { alignItems: 'center', marginTop: 60, gap: 12, paddingHorizontal: 24 },
   emptyTitle: { color: C.text, fontSize: 16, fontWeight: '700', textAlign: 'center' },
   emptyBody:  { color: C.textMuted, fontSize: 14, textAlign: 'center', lineHeight: 20 },
+
+  // Bouton "Modifier et resoumettre" dans la note de refus
+  resubmitBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: C.red,
+    borderRadius: 9,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    alignSelf: 'flex-start',
+  },
+  resubmitBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+
+  // Modal d'édition du rapport rejeté
+  modalRoot: {
+    flex: 1,
+    backgroundColor: C.bg,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: C.border,
+    backgroundColor: C.surface,
+    gap: 12,
+  },
+  modalTitle: { color: C.text, fontSize: 18, fontWeight: '800', letterSpacing: -0.3 },
+  modalSub:   { color: C.textMuted, fontSize: 13 },
+  modalCloseBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: C.surface2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  modalRefusalBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    margin: 16,
+    marginBottom: 4,
+    backgroundColor: '#fff1f2',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  modalRefusalText: { color: C.red, fontSize: 13, lineHeight: 18, flex: 1 },
+  modalInputLabel: {
+    color: C.textSub,
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginHorizontal: 16,
+    marginTop: 14,
+    marginBottom: 6,
+  },
+  modalTextInput: {
+    margin: 16,
+    marginTop: 0,
+    backgroundColor: C.surface,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: 14,
+    color: C.text,
+    fontSize: 15,
+    lineHeight: 22,
+    minHeight: 200,
+    textAlignVertical: 'top',
+  },
+  modalFooter: {
+    flexDirection: 'row',
+    gap: 10,
+    padding: 16,
+    paddingBottom: Platform.OS === 'ios' ? 28 : 16,
+    borderTopWidth: 1,
+    borderTopColor: C.border,
+    backgroundColor: C.surface,
+  },
+  modalCancelBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 13,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.surface2,
+  },
+  modalCancelTxt: { color: C.textSub, fontSize: 14, fontWeight: '700' },
+  modalSubmitBtn: {
+    flex: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    paddingVertical: 13,
+    borderRadius: 12,
+    backgroundColor: C.blue,
+  },
+  modalSubmitBtnDisabled: { backgroundColor: C.textMuted, opacity: 0.5 },
+  modalSubmitTxt: { color: '#fff', fontSize: 14, fontWeight: '700' },
 });

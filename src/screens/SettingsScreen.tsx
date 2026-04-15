@@ -19,12 +19,16 @@ import { listVoiceReports } from '@/storage/voiceReportsRepo';
 import { useAppLayout } from '@/hooks/useAppLayout';
 import type { DrawerParamList } from '@/navigation/types';
 import { useServerConfigStore } from '@/store/serverConfigStore';
+import { usePairingStore } from '@/store/pairingStore';
 import { C } from '@/theme/colors';
 
 type Props = DrawerScreenProps<DrawerParamList, 'Settings'>;
 
 export function SettingsScreen({ navigation }: Props) {
   const layout = useAppLayout();
+  const paired      = usePairingStore((s) => s.paired);
+  const clearPairing = usePairingStore((s) => s.clearPairing);
+  const isLinked    = paired?.status === 'linked' && !!paired.deviceToken;
   const {
     customIp, syncPort, authPort,
     setCustomIp, setSyncPort, setAuthPort,
@@ -250,15 +254,59 @@ export function SettingsScreen({ navigation }: Props) {
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Ionicons name="qr-code-outline" size={16} color={C.blue} />
-          <Text style={styles.sectionTitle}>Appairage desktop</Text>
+          <Text style={styles.sectionTitle}>Bureau lié</Text>
         </View>
-        <Pressable
-          onPress={() => navigation.navigate('Pairing')}
-          style={({ pressed }) => [styles.link, pressed && { opacity: 0.85 }]}
-        >
-          <Ionicons name="link-outline" size={14} color={C.blue} />
-          <Text style={styles.linkText}>Appairage avec le bureau (QR / code)</Text>
-        </Pressable>
+
+        {isLinked ? (
+          /* ── Déjà lié — affiche le statut et option de dissocier ─── */
+          <>
+            <View style={styles.pairingStatusRow}>
+              <Ionicons name="checkmark-circle" size={18} color={C.green} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.pairingLinkedLabel}>Connexion active</Text>
+                <Text style={styles.pairingLinkedSub} numberOfLines={1}>
+                  ID : {paired!.desktopDeviceId.slice(0, 16)}…
+                </Text>
+                {paired!.cloudApiBase ? (
+                  <Text style={styles.pairingLinkedSub} numberOfLines={1}>
+                    {paired!.cloudApiBase}
+                  </Text>
+                ) : null}
+              </View>
+            </View>
+            <Pressable
+              onPress={() =>
+                Alert.alert(
+                  'Dissocier le bureau',
+                  'Vous devrez re-scanner le QR pour accéder aux données du bureau.',
+                  [
+                    { text: 'Annuler', style: 'cancel' },
+                    { text: 'Dissocier', style: 'destructive', onPress: () => clearPairing() },
+                  ],
+                )
+              }
+              style={({ pressed }) => [styles.link, pressed && { opacity: 0.85 }]}
+            >
+              <Ionicons name="unlink-outline" size={14} color={C.red} />
+              <Text style={[styles.linkText, { color: C.red }]}>Dissocier ce bureau</Text>
+            </Pressable>
+          </>
+        ) : (
+          /* ── Pas lié — proposer l'appairage ────────────────────── */
+          <>
+            <View style={styles.pairingStatusRow}>
+              <Ionicons name="cloud-offline-outline" size={18} color={C.textMuted} />
+              <Text style={styles.pairingUnlinkedLabel}>Aucun bureau associé</Text>
+            </View>
+            <Pressable
+              onPress={() => navigation.navigate('Pairing')}
+              style={({ pressed }) => [styles.link, pressed && { opacity: 0.85 }]}
+            >
+              <Ionicons name="qr-code-outline" size={14} color={C.blue} />
+              <Text style={styles.linkText}>Scanner le QR du bureau</Text>
+            </Pressable>
+          </>
+        )}
       </View>
     </ScrollView>
     </KeyboardAvoidingView>
@@ -361,6 +409,17 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   linkText: { color: C.blue, fontWeight: '700', fontSize: 13 },
+
+  // Appairage
+  pairingStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    paddingVertical: 4,
+  },
+  pairingLinkedLabel: { color: C.green, fontWeight: '700', fontSize: 13 },
+  pairingLinkedSub:   { color: C.textMuted, fontSize: 11, marginTop: 2 },
+  pairingUnlinkedLabel: { color: C.textMuted, fontWeight: '600', fontSize: 13, flex: 1, alignSelf: 'center' },
 
   perfRow: { flexDirection: 'row', gap: 10 },
   perfCard: {

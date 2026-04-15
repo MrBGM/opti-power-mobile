@@ -20,6 +20,7 @@ import { getAuthCloudApiBase } from '@/config/env';
 import { useLogin } from '@/features/auth/useLogin';
 import type { AuthStackParamList } from '@/navigation/types';
 import { useServerConfigStore } from '@/store/serverConfigStore';
+import { usePairingStore } from '@/store/pairingStore';
 import { C } from '@/theme/colors';
 
 type LoginNav = NativeStackNavigationProp<AuthStackParamList, 'Login'>;
@@ -66,6 +67,9 @@ export function LoginScreen() {
   const [ipInput, setIpInput] = useState(customIp ?? '');
   const [syncPortInput, setSyncPortInput] = useState(String(syncPort));
   const [authPortInput, setAuthPortInput] = useState(String(authPort));
+
+  const paired   = usePairingStore((s) => s.paired);
+  const isLinked = paired?.status === 'linked' && !!paired.deviceToken;
 
   const canSubmit = !!email.trim() && !!password && !login.isPending;
   const errMsg =
@@ -173,13 +177,24 @@ export function LoginScreen() {
           <Text style={styles.buttonText}>{login.isPending ? 'Connexion...' : 'Se connecter'}</Text>
         </Pressable>
 
-        <Pressable
-          onPress={() => navigation.navigate('Pairing')}
-          style={({ pressed }) => [styles.secondaryBtn, pressed && { opacity: 0.85 }]}
-        >
-          <Ionicons name="link-outline" size={14} color={C.textSub} />
-          <Text style={styles.secondaryBtnText}>Appairage desktop</Text>
-        </Pressable>
+        {isLinked ? (
+          /* Bureau déjà lié — pas besoin de re-scanner */
+          <View style={styles.pairedBadge}>
+            <Ionicons name="checkmark-circle" size={14} color={C.green} />
+            <Text style={styles.pairedBadgeText}>
+              Bureau lié · {paired!.desktopDeviceId.slice(0, 10)}…
+            </Text>
+          </View>
+        ) : (
+          /* Pas encore lié — proposer l'appairage */
+          <Pressable
+            onPress={() => navigation.navigate('Pairing')}
+            style={({ pressed }) => [styles.secondaryBtn, pressed && { opacity: 0.85 }]}
+          >
+            <Ionicons name="link-outline" size={14} color={C.textSub} />
+            <Text style={styles.secondaryBtnText}>Appairage desktop</Text>
+          </Pressable>
+        )}
 
         {/* ── Indicateur serveur ──────────────────────────────────── */}
         <Pressable
@@ -376,6 +391,21 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   secondaryBtnText: { color: C.textSub, fontWeight: '600', fontSize: 13 },
+
+  // Badge "bureau lié" (remplace le bouton d'appairage quand déjà lié)
+  pairedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderRadius: 12,
+    borderColor: 'rgba(34,197,94,0.35)',
+    backgroundColor: 'rgba(20,83,45,0.08)',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+  },
+  pairedBadgeText: { color: C.green, fontWeight: '600', fontSize: 13 },
 
   // Indicateur serveur
   serverIndicator: {

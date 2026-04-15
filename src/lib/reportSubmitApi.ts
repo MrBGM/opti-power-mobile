@@ -88,6 +88,41 @@ export async function submitReportToSupervisor(
 }
 
 /**
+ * Resoume un rapport refusé avec un contenu modifié.
+ * Le serveur remet le statut à 'pending' et efface le motif de refus.
+ */
+export async function resubmitReport(
+  syncEndpoint: string,
+  deviceToken:  string,
+  cloudReportId: string,
+  transcription: string,
+  structuredJson?: unknown,
+): Promise<SubmitResult> {
+  const { signal, clear } = withTimeout(TIMEOUT_MS);
+  try {
+    const url = `${syncEndpoint.replace(/\/$/, '')}/v1/reports/${encodeURIComponent(cloudReportId)}/resubmit`;
+    const resp = await fetch(url, {
+      method:  'PATCH',
+      headers: {
+        'Content-Type':  'application/json',
+        'Authorization': `Bearer ${deviceToken}`,
+      },
+      body: JSON.stringify({ transcription, structuredJson }),
+      signal,
+    });
+    const json = (await resp.json().catch(() => ({}))) as { success?: boolean; reportId?: string; error?: string };
+    clear();
+    if (!resp.ok || json.success === false) {
+      return { success: false, error: json.error ?? `HTTP ${resp.status}` };
+    }
+    return { success: true, cloudReportId: json.reportId ?? cloudReportId };
+  } catch (e) {
+    clear();
+    return { success: false, error: (e as Error).message };
+  }
+}
+
+/**
  * Récupère le statut de revue de tous les rapports soumis par cet appareil.
  */
 export async function fetchMyReportStatuses(

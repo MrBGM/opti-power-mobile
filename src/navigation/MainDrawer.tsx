@@ -2,6 +2,7 @@ import { createDrawerNavigator } from '@react-navigation/drawer';
 
 import { RequireRole } from '@/components/RequireRole';
 import { useDesktopEquipmentsLiveSync } from '@/hooks/useDesktopEquipmentsLiveSync';
+import { usePairingRecovery } from '@/hooks/usePairingRecovery';
 import { AppDrawerContent } from '@/navigation/AppDrawerContent';
 import type { DrawerParamList } from '@/navigation/types';
 import { AdminScreen } from '@/screens/AdminScreen';
@@ -31,6 +32,7 @@ function AdminGate() {
 
 function DesktopSyncHost() {
   useDesktopEquipmentsLiveSync();
+  usePairingRecovery(); // récupère le deviceToken si l'app était fermée pendant le polling
   return null;
 }
 
